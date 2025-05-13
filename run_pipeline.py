@@ -1,23 +1,3 @@
-#!/usr/bin/env python3
-"""
-run_pipeline.py — One‑command orchestrator for your audio analysis workflow.
-
-Place this file in the same directory as the other scripts and run:
-    python run_pipeline.py
-
-It will perform, in sequence:
-  1. Download audio from the URLs in links.txt → audio_files/
-  2. Extract audio features → results/
-  3. Post‑process (outlier removal, scaling, log) → processed_results/
-  4. Plot features for both raw and processed results → results/ & processed_results/
-  5. K‑means clustering + visualisation → audio_clustering_results.csv
-
-You can skip any step with the --skip flag, e.g.:
-    python run_pipeline.py --skip download plot
-
-Dependencies: yt_dlp, librosa, numpy, scikit‑learn, matplotlib, pandas, scipy.
-"""
-
 import argparse
 import subprocess
 import sys
@@ -45,11 +25,10 @@ def main():
     )
     args = parser.parse_args()
 
-    py = sys.executable  # Absolute path to the current Python interpreter
+    py = sys.executable 
 
     here = Path(__file__).resolve().parent
-    # Change working dir to script location so relative paths work
-    # (Useful if you call this from another folder)
+    
     subprocess.run(["python", "-c", "import os,sys; os.chdir(sys.argv[1])" , str(here)])
 
     if "download" not in args.skip:

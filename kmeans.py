@@ -9,6 +9,14 @@ from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import silhouette_score
 
+try:
+    import tkinter as tk
+    from tkinter import ttk
+    from tkinter import font as tkfont
+    from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+except ImportError:
+    tk = None
+
 
 def run_kmeans_clustering(audio_dir='audio_files',
                           results_dir='results',
@@ -19,178 +27,161 @@ def run_kmeans_clustering(audio_dir='audio_files',
                           n_components=50,
                           dynamic_cluster_selection=False,
                           dynamic_k_min=2,
-                          dynamic_k_max=10):
+                          dynamic_k_max=10,
+                          ui=True):
+    os.makedirs(results_dir, exist_ok=True)
+
     wav_files = glob.glob(os.path.join(audio_dir, "*.wav"))
     if not wav_files:
-        print("No audio files found in the audio directory.")
+        print("No audio files found.")
         return
 
-    feature_vectors = []
-    file_names = []
-
-    for wav_path in wav_files:
-        base_filename = os.path.splitext(os.path.basename(wav_path))[0]
-        mfcc_path = os.path.join(results_dir, f"{base_filename}_mfcc.npy")
-        mel_path = os.path.join(
-            results_dir, f"{base_filename}_melspectrogram.npy")
-        spectral_centroid_path = os.path.join(
-            results_dir, f"{base_filename}_spectral_centroid.npy")
-        spectral_flatness_path = os.path.join(
-            results_dir, f"{base_filename}_spectral_flatness.npy")
-        zcr_path = os.path.join(
-            results_dir, f"{base_filename}_zero_crossing_rate.npy")
-        if not all(os.path.isfile(p) for p in [mfcc_path, mel_path, spectral_centroid_path, spectral_flatness_path, zcr_path]):
-            print(f"Missing feature files for {base_filename}, skipping.")
+    file_names, feature_vectors = [], []
+    for path in wav_files:
+        base = os.path.splitext(os.path.basename(path))[0]
+        feats = {k: os.path.join(results_dir, f"{base}_{k}.npy") for k in [
+            'mfcc', 'melspectrogram', 'spectral_centroid', 'spectral_flatness', 'zero_crossing_rate']}
+        if not all(os.path.isfile(p) for p in feats.values()):
             continue
-
-        mfcc = np.load(mfcc_path)
-        mel = np.load(mel_path)
-        spectral_centroid = np.load(spectral_centroid_path)
-        spectral_flatness = np.load(spectral_flatness_path)
-        zcr = np.load(zcr_path)
-
-        mfcc_features = np.concatenate(
-            [np.mean(mfcc, axis=1), np.std(mfcc, axis=1)])
-        mel_features = np.concatenate(
-            [np.mean(mel, axis=1), np.std(mel, axis=1)])
-        spectral_centroid_features = np.concatenate(
-            [np.mean(spectral_centroid, axis=1), np.std(spectral_centroid, axis=1)])
-        spectral_flatness_features = np.concatenate(
-            [np.mean(spectral_flatness, axis=1), np.std(spectral_flatness, axis=1)])
-        zcr_features = np.concatenate(
-            [np.mean(zcr, axis=1), np.std(zcr, axis=1)])
-
-        feature_vector = np.concatenate(
-            [mfcc_features, mel_features, spectral_centroid_features, spectral_flatness_features, zcr_features])
-        feature_vectors.append(feature_vector)
-        file_names.append(base_filename)
+        arrays = [np.load(feats[k]) for k in feats]
+        vec = np.concatenate(
+            [np.concatenate([arr.mean(axis=1), arr.std(axis=1)]) for arr in arrays])
+        file_names.append(base)
+        feature_vectors.append(vec)
 
     if not feature_vectors:
-        print("No audio files with complete features found.")
+        print("No complete feature files.")
         return
 
-    X = np.array(feature_vectors)
-    scaler = StandardScaler()
-    X = scaler.fit_transform(X)
-
+    X = StandardScaler().fit_transform(np.vstack(feature_vectors))
     if reduce_dim:
-        pca_reducer = PCA(n_components=n_components, random_state=42)
-        X = pca_reducer.fit_transform(X)
-
-    ClusterModel = KMeans
-
-    if show_elbow:
-        inertia = []
-        k_range = range(1, elbow_max_k + 1)
-        for k in k_range:
-            model = ClusterModel(
-                n_clusters=k, init='k-means++', n_init=10, random_state=42)
-            model.fit(X)
-            inertia.append(model.inertia_)
-        plt.figure(figsize=(8, 6))
-        plt.plot(k_range, inertia, 'bo-', markersize=8)
-        plt.xlabel('Number of Clusters (k)')
-        plt.ylabel('Inertia')
-        plt.title('Elbow Method For Optimal k')
-        plt.xticks(k_range)
-        plt.show()
+        X = PCA(n_components=n_components, random_state=42).fit_transform(X)
 
     if dynamic_cluster_selection:
-        silhouette_scores = {}
-        for k in range(dynamic_k_min, dynamic_k_max + 1):
-            model = ClusterModel(
-                n_clusters=k, init='k-means++', n_init=10, random_state=42)
-            cluster_labels = model.fit_predict(X)
-            score = silhouette_score(X, cluster_labels)
-            silhouette_scores[k] = score
-        best_k = max(silhouette_scores, key=silhouette_scores.get)
-        print("Silhouette scores:")
-        for k, score in silhouette_scores.items():
-            print(f"  k = {k}: silhouette score = {score:.4f}")
-        print(
-            f"Optimal number of clusters based on silhouette score: {best_k}")
-        n_clusters = best_k
+        sil_scores = {k: silhouette_score(X, KMeans(n_clusters=k, random_state=42, n_init=10).fit_predict(
+            X)) for k in range(dynamic_k_min, dynamic_k_max+1)}
+        n_clusters = max(sil_scores, key=sil_scores.get)
+        print(f"Optimal k: {n_clusters}")
 
-    clustering_params = {
-        'n_clusters': n_clusters,
-        'init': 'k-means++',
-        'n_init': 10,
-        'random_state': 42
-    }
-    cluster_model = ClusterModel(**clustering_params)
-    clusters = cluster_model.fit_predict(X)
-    distances = np.linalg.norm(
-        X - cluster_model.cluster_centers_[clusters], axis=1)
-    print("\nCluster assignments:")
-    for fname, cluster in zip(file_names, clusters):
-        print(f"  {fname}: Cluster {cluster}")
+    km = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+    labels = km.fit_predict(X)
+    centers = km.cluster_centers_
 
-    pca_vis = PCA(n_components=2, random_state=42)
-    X_pca = pca_vis.fit_transform(X)
-    df = pd.DataFrame({
-        'Song': file_names,
-        'Cluster': clusters,
-        'Distance_to_Center': distances,
-        'PCA1': X_pca[:, 0],
-        'PCA2': X_pca[:, 1]
-    })
+    df = pd.DataFrame({'Song': file_names, 'Cluster': labels,
+                       'Distance': np.linalg.norm(X - centers[labels], axis=1)})
+    csv_path = os.path.join(results_dir, 'audio_clustering_results.csv')
+    df.to_csv(csv_path, index=False)
+    print(f"Results saved to: {csv_path}")
 
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    csv_path = os.path.join(script_dir, 'audio_clustering_results.csv')
-    df.to_csv(csv_path, index=False, encoding='utf-8')
-    print(f"\nSaved clustering results to CSV: {csv_path}")
+    # 2D PCA for plot
+    coords = PCA(n_components=2, random_state=42).fit_transform(X)
+    df['PC1'], df['PC2'] = coords[:, 0], coords[:, 1]
 
-    fig, ax = plt.subplots(figsize=(8, 6))
-    scatter = ax.scatter(X_pca[:, 0], X_pca[:, 1], c=clusters,
-                         cmap='viridis', s=100, alpha=0.7, picker=True)
-    unique_clusters = np.unique(clusters)
-    for cl in unique_clusters:
-        indices = np.where(clusters == cl)[0]
-        if len(indices) >= 3:
-            points = X_pca[indices]
-            hull = ConvexHull(points)
-            hull_points = points[hull.vertices]
-            hull_points = np.concatenate(
-                (hull_points, hull_points[0:1]), axis=0)
-            ax.plot(hull_points[:, 0], hull_points[:, 1], 'k-', lw=2)
-        else:
-            for idx in indices:
-                ax.plot(X_pca[idx, 0], X_pca[idx, 1], 'ko',
-                        markersize=12, fillstyle='none')
-
-    ax.set_xlabel("PCA Component 1")
-    ax.set_ylabel("PCA Component 2")
-    ax.set_title("K-Means Clustering of Audio Features")
-    plt.colorbar(scatter, ax=ax, label="Cluster")
-
-    annot = ax.annotate("", xy=(0, 0), xytext=(10, 10), textcoords="offset points", bbox=dict(
-        boxstyle="round", fc="w"), arrowprops=dict(arrowstyle="->"))
-    annot.set_visible(False)
-
-    def update_annotation(event_ind):
-        idx = event_ind[0]
-        x, y = X_pca[idx, 0], X_pca[idx, 1]
-        song_name = df['Song'].iloc[idx]
-        annot.xy = (x, y)
-        annot.set_text(song_name)
-        annot.set_visible(True)
-        fig.canvas.draw_idle()
-
-    def on_pick(event):
-        if len(event.ind) > 0:
-            update_annotation(event.ind)
-
-    fig.canvas.mpl_connect('pick_event', on_pick)
-    plt.tight_layout()
-    plt.show()
+    if ui and tk:
+        launch_ui(file_names, X, labels, coords)
+    elif ui:
+        print("UI unavailable (tkinter missing).")
 
 
-if __name__ == "__main__":
-    run_kmeans_clustering(audio_dir='audio_files',
-                          results_dir='results',
-                          n_clusters=3,
-                          reduce_dim=True,
-                          n_components=50,
-                          dynamic_cluster_selection=True,
-                          dynamic_k_min=2,
-                          dynamic_k_max=10)
+def launch_ui(file_names, X, labels, coords, top_n=5):
+    """
+    Modern UI with PanedWindow: left pane for song list & search, right pane for recommendations and visualization.
+    """
+    root = tk.Tk()
+    root.title("🎵 Audio Recommendation System 🎵")
+    root.geometry('800x600')
+    root.minsize(700, 500)
+    style = ttk.Style(root)
+    if "clam" in style.theme_names():
+        style.theme_use('clam')
+
+    # Fonts
+    header_font = tkfont.Font(size=14, weight='bold')
+    normal_font = tkfont.Font(size=11)
+
+    # Header
+    header = ttk.Frame(root, padding=(10, 5))
+    header.pack(fill='x')
+    ttk.Label(header, text="Audio Recommendation System",
+              font=header_font).pack(side='left')
+
+    # Main paned window
+    paned = ttk.Panedwindow(root, orient='horizontal')
+    paned.pack(fill='both', expand=True, padx=10, pady=5)
+
+    # Left pane: song selection
+    left = ttk.Frame(paned, width=250)
+    paned.add(left, weight=1)
+    ttk.Label(left, text="🔍 Search Songs:", font=normal_font).pack(
+        anchor='w', pady=(5, 0))
+    search_var = tk.StringVar()
+    search_entry = ttk.Entry(left, textvariable=search_var)
+    search_entry.pack(fill='x', pady=5)
+
+    ttk.Label(left, text="🎶 All Songs:", font=normal_font).pack(anchor='w')
+    song_list = tk.Listbox(left, font=normal_font, activestyle='none')
+    scroll_songs = ttk.Scrollbar(
+        left, orient='vertical', command=song_list.yview)
+    song_list.config(yscrollcommand=scroll_songs.set)
+    song_list.pack(side='left', fill='both', expand=True)
+    scroll_songs.pack(side='right', fill='y')
+
+    # populate list
+    for name in file_names:
+        song_list.insert('end', name)
+
+    # Right pane: visualization & recommendations
+    right = ttk.Frame(paned)
+    paned.add(right, weight=3)
+    ttk.Label(right, text="Recommendations", font=header_font).pack(
+        anchor='w', pady=(5, 0))
+
+    rec_list = tk.Listbox(right, font=normal_font)
+    scroll_rec = ttk.Scrollbar(
+        right, orient='vertical', command=rec_list.yview)
+    rec_list.config(yscrollcommand=scroll_rec.set)
+    rec_list.pack(fill='both', expand=False, pady=(0, 5))
+    scroll_rec.pack(fill='y', side='right')
+
+    # Matplotlib plot
+    fig, ax = plt.subplots(figsize=(4, 4))
+    scatter = ax.scatter(coords[:, 0], coords[:, 1],
+                         c=labels, cmap='tab10', s=50)
+    ax.set_title('2D PCA Clusters')
+    ax.set_xlabel('PC1')
+    ax.set_ylabel('PC2')
+    canvas = FigureCanvasTkAgg(fig, master=right)
+    canvas.draw()
+    canvas.get_tk_widget().pack(fill='both', expand=True)
+
+    def filter_songs(*args):
+        query = search_var.get().lower()
+        song_list.delete(0, 'end')
+        for name in file_names:
+            if query in name.lower():
+                song_list.insert('end', name)
+
+    search_var.trace_add('write', filter_songs)
+
+    def on_song_select(event):
+        sel = song_list.curselection()
+        if not sel:
+            return
+        idx = file_names.index(song_list.get(sel))
+        dists = np.linalg.norm(X - X[idx], axis=1)
+        same = [(file_names[i], d) for i, d in enumerate(
+            dists) if labels[i] == labels[idx] and i != idx]
+        same.sort(key=lambda x: x[1])
+        recs = same[:top_n]
+        rec_list.delete(0, 'end')
+        for name, _ in recs:
+            rec_list.insert('end', name)
+
+    song_list.bind('<<ListboxSelect>>', on_song_select)
+
+    root.mainloop()
+
+
+if __name__ == '__main__':
+    run_kmeans_clustering(audio_dir='audio_files', results_dir='results',
+                          n_clusters=3, reduce_dim=True, dynamic_cluster_selection=True)
