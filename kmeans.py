@@ -17,9 +17,10 @@ try:
     import tkinter as tk
     from tkinter import ttk
     from tkinter import font as tkfont
-except ImportError as exc:  
+except ImportError as exc:
     raise RuntimeError(
         "Tkinter isn’t available on your Python installation.") from exc
+
 
 def run_kmeans_clustering(
     audio_dir: str = "audio_files",
@@ -84,6 +85,7 @@ def run_kmeans_clustering(
 
     return df, coords, labels
 
+
 def launch_ui(df: pd.DataFrame, coords: np.ndarray, labels: np.ndarray, top_n: int = 5):
     root = tk.Tk()
     root.title("🎵 Audio Recommendation System")
@@ -134,7 +136,7 @@ def launch_ui(df: pd.DataFrame, coords: np.ndarray, labels: np.ndarray, top_n: i
     fig = plt.Figure(figsize=(5, 4))
     ax = fig.add_subplot(111)
 
-    def full_scatter(alpha=0.35):
+    def full_scatter(alpha=1.0):
         return ax.scatter(coords[:, 0], coords[:, 1], c=labels, cmap="tab10", alpha=alpha,
                           edgecolors="none", s=50)
 
@@ -175,7 +177,7 @@ def launch_ui(df: pd.DataFrame, coords: np.ndarray, labels: np.ndarray, top_n: i
 
     def redraw_plot(sel_idx: int, neighbour_indices: np.ndarray):
         ax.clear()
-        full_scatter(alpha=0.15)
+        full_scatter(alpha=1.0)  # solid opaque background points
         ax.scatter(coords[sel_idx, 0], coords[sel_idx, 1], s=160,
                    facecolors="none", edgecolors="red", linewidths=2, zorder=3)
         for i in neighbour_indices:
@@ -215,6 +217,7 @@ def launch_ui(df: pd.DataFrame, coords: np.ndarray, labels: np.ndarray, top_n: i
     song_list.bind("<<ListboxSelect>>", on_song_select)
 
     root.mainloop()
+
 
 if __name__ == "__main__":
     DF, COORDS, LABELS = run_kmeans_clustering(
