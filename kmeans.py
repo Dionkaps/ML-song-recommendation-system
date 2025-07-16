@@ -13,6 +13,8 @@ import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
+import feature_vars as fv
+
 try:
     import tkinter as tk
     from tkinter import ttk
@@ -22,6 +24,17 @@ except ImportError as exc:
         "Tkinter isn’t available on your Python installation.") from exc
 
 
+def build_group_weights(n_mfcc: int = fv.n_mfcc, n_mels: int = fv.n_mels) -> np.ndarray:
+    group_sizes = [2 * n_mfcc, 2 * n_mels, 2, 2, 2]
+    total_dims = sum(group_sizes)
+    w = np.ones(total_dims, dtype=np.float32)
+    idx = 0
+    for g in group_sizes:
+        w[idx:idx + g] /= np.sqrt(g)
+        idx += g
+    return w
+
+
 def run_kmeans_clustering(
     audio_dir: str = "audio_files",
     results_dir: str = "results",
@@ -29,6 +42,8 @@ def run_kmeans_clustering(
     dynamic_cluster_selection: bool = False,
     dynamic_k_min: int = 2,
     dynamic_k_max: int = 10,
+    n_mfcc: int = fv.n_mfcc,
+    n_mels: int = fv.n_mels,
 ):
     os.makedirs(results_dir, exist_ok=True)
     wav_files = glob.glob(os.path.join(audio_dir, "*.wav"))
@@ -55,7 +70,12 @@ def run_kmeans_clustering(
     if not feature_vectors:
         raise RuntimeError("No songs with complete feature files were found.")
 
-    X = StandardScaler().fit_transform(np.vstack(feature_vectors))
+    X_scaled = StandardScaler().fit_transform(np.vstack(feature_vectors))
+    weights = build_group_weights(n_mfcc=n_mfcc, n_mels=n_mels)
+    if X_scaled.shape[1] != len(weights):
+        raise ValueError(
+            f"Expected {len(weights)} dims after feature concat, got {X_scaled.shape[1]}")
+    X = X_scaled * weights
 
     if dynamic_cluster_selection:
         sil = {}
@@ -79,7 +99,7 @@ def run_kmeans_clustering(
         "PCA1": coords[:, 0],
         "PCA2": coords[:, 1],
     })
-    csv_path = os.path.join(results_dir, "audio_clustering_results.csv")
+    csv_path = os.path.join("audio_clustering_results.csv")
     df.to_csv(csv_path, index=False)
     print(f"Results written to → {csv_path}")
 
@@ -142,9 +162,9 @@ def launch_ui(df: pd.DataFrame, coords: np.ndarray, labels: np.ndarray, top_n: i
 
     base_scatter = full_scatter()
 
-    ax.set_xlabel("PCA‑1")
-    ax.set_ylabel("PCA‑2")
-    ax.set_title("K‑means clusters (PCA projection)")
+    ax.set_xlabel("PCA-1")
+    ax.set_ylabel("PCA-2")
+    ax.set_title("K-means clusters (PCA projection)")
     ax.grid(True, linestyle=":", linewidth=0.4)
 
     handles, _ = base_scatter.legend_elements(prop="colors")
@@ -177,7 +197,7 @@ def launch_ui(df: pd.DataFrame, coords: np.ndarray, labels: np.ndarray, top_n: i
 
     def redraw_plot(sel_idx: int, neighbour_indices: np.ndarray):
         ax.clear()
-        full_scatter(alpha=1.0)  # solid opaque background points
+        full_scatter(alpha=1.0)
         ax.scatter(coords[sel_idx, 0], coords[sel_idx, 1], s=160,
                    facecolors="none", edgecolors="red", linewidths=2, zorder=3)
         for i in neighbour_indices:
@@ -193,9 +213,9 @@ def launch_ui(df: pd.DataFrame, coords: np.ndarray, labels: np.ndarray, top_n: i
         xmax, ymax = pts.max(axis=0) + margin
         ax.set_xlim(xmin, xmax)
         ax.set_ylim(ymin, ymax)
-        ax.set_xlabel("PCA‑1")
-        ax.set_ylabel("PCA‑2")
-        ax.set_title("K‑means clusters (zoomed)")
+        ax.set_xlabel("PCA-1")
+        ax.set_ylabel("PCA-2")
+        ax.set_title("K-means clusters (zoomed)")
         ax.grid(True, linestyle=":", linewidth=0.4)
         canvas.draw_idle()
 

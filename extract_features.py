@@ -3,35 +3,35 @@ import glob
 import multiprocessing
 import time
 from concurrent.futures import ProcessPoolExecutor
-
+import feature_vars as fv
 import librosa
 import numpy as np
 
 
-def extract_mfcc(y, sr, n_mfcc=13):
+def extract_mfcc(y, sr, n_mfcc=fv.n_mfcc):
     return librosa.feature.mfcc(y=y, sr=sr, n_mfcc=n_mfcc)
 
 
-def extract_melspectrogram(y, sr, n_fft=2048, hop_length=512, n_mels=128):
+def extract_melspectrogram(y, sr, n_fft=fv.n_fft, hop_length=fv.hop_length, n_mels=fv.n_mels):
     mel_spectrogram = librosa.feature.melspectrogram(
         y=y, sr=sr, n_fft=n_fft, hop_length=hop_length, n_mels=n_mels
     )
     return librosa.power_to_db(mel_spectrogram, ref=np.max)
 
 
-def extract_spectral_centroid(y, sr, hop_length=512, n_fft=2048):
+def extract_spectral_centroid(y, sr, hop_length=fv.hop_length, n_fft=fv.n_fft):
     return librosa.feature.spectral_centroid(
         y=y, sr=sr, hop_length=hop_length, n_fft=n_fft
     )
 
 
-def extract_spectral_flatness(y, hop_length=512, n_fft=2048):
+def extract_spectral_flatness(y, hop_length=fv.hop_length, n_fft=fv.n_fft):
     return librosa.feature.spectral_flatness(
         y=y, hop_length=hop_length, n_fft=n_fft
     )
 
 
-def extract_zero_crossing_rate(y, hop_length=512):
+def extract_zero_crossing_rate(y, hop_length=fv.hop_length):
     return librosa.feature.zero_crossing_rate(y=y, hop_length=hop_length)
 
 
@@ -76,11 +76,6 @@ def run_feature_extraction(audio_dir='audio_files', results_dir='results'):
         print(f"No .wav files found in {audio_dir}.")
         return
 
-    # Hyperparameters
-    n_mfcc = 13
-    n_fft = 2048
-    hop_length = 512
-    n_mels = 128
 
     # Determine number of worker processes
     num_workers = min(len(wav_files), multiprocessing.cpu_count())
@@ -93,10 +88,10 @@ def run_feature_extraction(audio_dir='audio_files', results_dir='results'):
                 process_file,
                 wav_path,
                 results_dir,
-                n_mfcc,
-                n_fft,
-                hop_length,
-                n_mels
+                fv.n_mfcc,
+                fv.n_fft,
+                fv.hop_length,
+                fv.n_mels
             )
             for wav_path in wav_files
         ]
