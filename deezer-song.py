@@ -3,15 +3,10 @@ import os
 import sys
 import re
 import time
-import json
 import multiprocessing
 from concurrent.futures import ThreadPoolExecutor
 
 DEEZE_AUDIO_FOLDER = "audio_files"
-RESULTS_FOLDER = "results"
-
-# Ensure the results directory exists
-os.makedirs(RESULTS_FOLDER, exist_ok=True)
 
 
 def search_song(song_name):
@@ -46,59 +41,11 @@ def download_preview(preview_url, output_file):
                 f.write(chunk)
 
     return True
-    
-    
-def get_genre_information(song):
-    """Get genre information for a song if available"""
-    # Check if album information is available
-    album_id = song.get('album', {}).get('id')
-    if not album_id:
-        return "Unknown"
-    
-    # Make API request to get album details which includes genre
-    album_url = f"https://api.deezer.com/album/{album_id}"
-    response = requests.get(album_url)
-    
-    if response.status_code != 200:
-        return "Unknown"
-        
-    album_data = response.json()
-    
-    # Get genre information
-    genres = album_data.get('genres', {}).get('data', [])
-    if not genres:
-        return "Unknown"
-    
-    # Return the first genre name
-    return genres[0].get('name', "Unknown")
 
 
 def sanitize_filename(filename):
     # Remove or replace invalid characters for Windows filenames
     return re.sub(r'[<>:"/\\|?*]', '_', filename)
-
-
-def save_genre_information(song_name, genre):
-    """Save the genre information for a song to a JSON file in the results directory"""
-    # Create a dictionary to store song-genre mappings
-    genre_file = os.path.join(RESULTS_FOLDER, "song_genres.json")
-    
-    # Load existing data if file exists
-    if os.path.exists(genre_file):
-        try:
-            with open(genre_file, 'r', encoding='utf-8') as f:
-                genre_data = json.load(f)
-        except json.JSONDecodeError:
-            genre_data = {}
-    else:
-        genre_data = {}
-    
-    # Update with new song-genre information
-    genre_data[song_name] = genre
-    
-    # Write back to file
-    with open(genre_file, 'w', encoding='utf-8') as f:
-        json.dump(genre_data, f, ensure_ascii=False, indent=2)
 
 
 def process_song(song_line):
@@ -126,15 +73,12 @@ def process_song(song_line):
             title = song.get('title', 'Unknown')
             artist = song.get('artist', {}).get('name', 'Unknown Artist')
             preview_url = song.get('preview', None)
-            
-            # Get the genre information
-            genre = get_genre_information(song)
 
             if not preview_url:
                 print(f"No preview available for {title} by {artist}")
                 return False
 
-            print(f"Found: {title} by {artist} (Genre: {genre})")
+            print(f"Found: {title} by {artist}")
 
             # Ensure the output folder exists
             if not os.path.exists(DEEZE_AUDIO_FOLDER):
@@ -151,8 +95,6 @@ def process_song(song_line):
 
             if success:
                 print(f"Download complete! Saved to {output_file}")
-                # Save genre information
-                save_genre_information(valid_filename, genre)
                 return True
             else:
                 print("Download failed")
@@ -177,15 +119,12 @@ def process_song(song_line):
         title = song.get('title', 'Unknown')
         artist = song.get('artist', {}).get('name', 'Unknown Artist')
         preview_url = song.get('preview', None)
-        
-        # Get the genre information
-        genre = get_genre_information(song)
-        
+
         if not preview_url:
             print(f"No preview available for {title} by {artist}")
             return False
 
-        print(f"Found: {title} by {artist} (Genre: {genre})")
+        print(f"Found: {title} by {artist}")
 
         # Ensure the output folder exists
         if not os.path.exists(DEEZE_AUDIO_FOLDER):
@@ -201,8 +140,6 @@ def process_song(song_line):
 
         if success:
             print(f"Download complete! Saved to {output_file}")
-            # Save genre information
-            save_genre_information(valid_filename, genre)
             return True
         else:
             print("Download failed")
