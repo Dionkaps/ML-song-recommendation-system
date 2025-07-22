@@ -2,10 +2,28 @@ import os
 import glob
 import multiprocessing
 import time
+import warnings
 from concurrent.futures import ProcessPoolExecutor
 import feature_vars as fv
 import librosa
 import numpy as np
+import contextlib
+import io
+import sys
+
+# Suppress specific warnings
+warnings.filterwarnings("ignore", category=UserWarning)
+warnings.filterwarnings("ignore", category=FutureWarning)
+
+@contextlib.contextmanager
+def suppress_stderr():
+    """Context manager to temporarily redirect stderr to suppress warnings."""
+    stderr = sys.stderr
+    sys.stderr = io.StringIO()
+    try:
+        yield
+    finally:
+        sys.stderr = stderr
 
 
 def extract_mfcc(y, sr, n_mfcc=fv.n_mfcc):
@@ -35,14 +53,19 @@ def extract_zero_crossing_rate(y, hop_length=fv.hop_length):
     return librosa.feature.zero_crossing_rate(y=y, hop_length=hop_length)
 
 
-def process_file(wav_path, results_dir, n_mfcc, n_fft, hop_length, n_mels):
+def process_file(audio_path, results_dir, n_mfcc, n_fft, hop_length, n_mels):
     """
     Load an audio file, extract features, and save them to .npy files.
     """
-    base_filename = os.path.splitext(os.path.basename(wav_path))[0]
+    filename = os.path.basename(audio_path)
+    base_filename = os.path.splitext(filename)[0]
     try:
-        print(f"Loading {base_filename}.wav...")
-        y, sr = librosa.load(wav_path, sr=None)
+        print(f"Loading {filename}...")
+        
+        # Suppress stderr output during audio loading to hide mpg123 warnings
+        with suppress_stderr():
+            y, sr = librosa.load(audio_path, sr=None)
+            
         # Extract features
         mfccs = extract_mfcc(y, sr, n_mfcc)
         mel_spec = extract_melspectrogram(y, sr, n_fft, hop_length, n_mels)
@@ -61,24 +84,24 @@ def process_file(wav_path, results_dir, n_mfcc, n_fft, hop_length, n_mels):
         np.save(os.path.join(results_dir,
                 f"{base_filename}_zero_crossing_rate.npy"), zcr)
 
-        print(f"Finished processing {base_filename}.wav")
+        print(f"Finished processing {filename}")
     except Exception as e:
-        print(f"Error processing {base_filename}.wav: {e}")
+        print(f"Error processing {filename}: {e}")
 
 
 def run_feature_extraction(audio_dir='audio_files', results_dir='results'):
     """
-    Finds all .wav files in the audio_dir and processes them in parallel.
+    Finds all .mp3 files in the audio_dir and processes them in parallel.
     """
     os.makedirs(results_dir, exist_ok=True)
-    wav_files = glob.glob(os.path.join(audio_dir, "*.wav"))
-    if not wav_files:
-        print(f"No .wav files found in {audio_dir}.")
+    audio_files = glob.glob(os.path.join(audio_dir, "*.mp3"))
+    if not audio_files:
+        print(f"No .mp3 files found in {audio_dir}.")
         return
 
 
     # Determine number of worker processes
-    num_workers = min(len(wav_files), multiprocessing.cpu_count())
+    num_workers = min(len(audio_files), multiprocessing.cpu_count())
     print(f"Starting parallel processing with {num_workers} workers...")
 
     # Use ProcessPoolExecutor for CPU-bound tasks
@@ -86,14 +109,14 @@ def run_feature_extraction(audio_dir='audio_files', results_dir='results'):
         futures = [
             executor.submit(
                 process_file,
-                wav_path,
+                audio_path,
                 results_dir,
                 fv.n_mfcc,
                 fv.n_fft,
                 fv.hop_length,
                 fv.n_mels
             )
-            for wav_path in wav_files
+            for audio_path in audio_files
         ]
         # Wait for all to complete
         for future in futures:

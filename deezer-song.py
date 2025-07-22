@@ -1,0 +1,263 @@
+import requests
+import os
+import sys
+import re
+import time
+import json
+import multiprocessing
+from concurrent.futures import ThreadPoolExecutor
+
+DEEZE_AUDIO_FOLDER = "audio_files"
+RESULTS_FOLDER = "results"
+
+# Ensure the results directory exists
+os.makedirs(RESULTS_FOLDER, exist_ok=True)
+
+
+def search_song(song_name):
+    """Search for a song on Deezer by name"""
+    search_url = f"https://api.deezer.com/search?q={song_name}"
+    response = requests.get(search_url)
+
+    if response.status_code != 200:
+        print(f"Error searching for song: {response.status_code}")
+        return None
+
+    data = response.json()
+    if data.get('total', 0) == 0:
+        print(f"No songs found for '{song_name}'")
+        return None
+
+    # Return the first song result
+    return data['data'][0]
+
+
+def download_preview(preview_url, output_file):
+    """Download the audio preview from the given URL"""
+    response = requests.get(preview_url, stream=True)
+
+    if response.status_code != 200:
+        print(f"Error downloading preview: {response.status_code}")
+        return False
+
+    with open(output_file, 'wb') as f:
+        for chunk in response.iter_content(chunk_size=1024):
+            if chunk:
+                f.write(chunk)
+
+    return True
+    
+    
+def get_genre_information(song):
+    """Get genre information for a song if available"""
+    # Check if album information is available
+    album_id = song.get('album', {}).get('id')
+    if not album_id:
+        return "Unknown"
+    
+    # Make API request to get album details which includes genre
+    album_url = f"https://api.deezer.com/album/{album_id}"
+    response = requests.get(album_url)
+    
+    if response.status_code != 200:
+        return "Unknown"
+        
+    album_data = response.json()
+    
+    # Get genre information
+    genres = album_data.get('genres', {}).get('data', [])
+    if not genres:
+        return "Unknown"
+    
+    # Return the first genre name
+    return genres[0].get('name', "Unknown")
+
+
+def sanitize_filename(filename):
+    # Remove or replace invalid characters for Windows filenames
+    return re.sub(r'[<>:"/\\|?*]', '_', filename)
+
+
+def save_genre_information(song_name, genre):
+    """Save the genre information for a song to a JSON file in the results directory"""
+    # Create a dictionary to store song-genre mappings
+    genre_file = os.path.join(RESULTS_FOLDER, "song_genres.json")
+    
+    # Load existing data if file exists
+    if os.path.exists(genre_file):
+        try:
+            with open(genre_file, 'r', encoding='utf-8') as f:
+                genre_data = json.load(f)
+        except json.JSONDecodeError:
+            genre_data = {}
+    else:
+        genre_data = {}
+    
+    # Update with new song-genre information
+    genre_data[song_name] = genre
+    
+    # Write back to file
+    with open(genre_file, 'w', encoding='utf-8') as f:
+        json.dump(genre_data, f, ensure_ascii=False, indent=2)
+
+
+def process_song(song_line):
+    """Process a single song line from the file"""
+    try:
+        if '–' in song_line:
+            parts = song_line.strip().split('–')
+        elif '-' in song_line:
+            parts = song_line.strip().split('-')
+        else:
+            # If there's no separator, assume the entire line is a song name
+            print(
+                f"No artist specified for song: {song_line}. Searching by song name only.")
+            song_name = song_line.strip()
+            artist_name = ""
+            search_query = song_name
+
+            print(f"Searching for: {song_name}")
+
+            song = search_song(search_query)
+            if not song:
+                return False
+
+            # Rest of the function continues here with the song object
+            title = song.get('title', 'Unknown')
+            artist = song.get('artist', {}).get('name', 'Unknown Artist')
+            preview_url = song.get('preview', None)
+            
+            # Get the genre information
+            genre = get_genre_information(song)
+
+            if not preview_url:
+                print(f"No preview available for {title} by {artist}")
+                return False
+
+            print(f"Found: {title} by {artist} (Genre: {genre})")
+
+            # Ensure the output folder exists
+            if not os.path.exists(DEEZE_AUDIO_FOLDER):
+                os.makedirs(DEEZE_AUDIO_FOLDER)
+
+            # Create a valid filename from the song title and artist
+            raw_filename = f"{artist} - {title}"
+            valid_filename = sanitize_filename(raw_filename)
+            output_file = os.path.join(
+                DEEZE_AUDIO_FOLDER, f"{valid_filename}.mp3")
+
+            print(f"Downloading preview to {output_file}...")
+            success = download_preview(preview_url, output_file)
+
+            if success:
+                print(f"Download complete! Saved to {output_file}")
+                # Save genre information
+                save_genre_information(valid_filename, genre)
+                return True
+            else:
+                print("Download failed")
+                return False
+
+        if len(parts) != 2:
+            print(f"Invalid format in line: {song_line}")
+            return False
+
+        # Original code for when there is artist information
+        song_name = parts[0].strip()
+        artist_name = parts[1].strip()
+        search_query = f"{song_name} {artist_name}"
+
+        print(f"Searching for: {song_name} by {artist_name}")
+
+        song = search_song(search_query)
+        if not song:
+            return False
+
+        # Display song info
+        title = song.get('title', 'Unknown')
+        artist = song.get('artist', {}).get('name', 'Unknown Artist')
+        preview_url = song.get('preview', None)
+        
+        # Get the genre information
+        genre = get_genre_information(song)
+        
+        if not preview_url:
+            print(f"No preview available for {title} by {artist}")
+            return False
+
+        print(f"Found: {title} by {artist} (Genre: {genre})")
+
+        # Ensure the output folder exists
+        if not os.path.exists(DEEZE_AUDIO_FOLDER):
+            os.makedirs(DEEZE_AUDIO_FOLDER)
+
+        # Create a valid filename from the song title and artist
+        raw_filename = f"{artist} - {title}"
+        valid_filename = sanitize_filename(raw_filename)
+        output_file = os.path.join(DEEZE_AUDIO_FOLDER, f"{valid_filename}.mp3")
+
+        print(f"Downloading preview to {output_file}...")
+        success = download_preview(preview_url, output_file)
+
+        if success:
+            print(f"Download complete! Saved to {output_file}")
+            # Save genre information
+            save_genre_information(valid_filename, genre)
+            return True
+        else:
+            print("Download failed")
+            return False
+    except Exception as e:
+        print(f"Error processing song '{song_line}': {str(e)}")
+        return False
+
+
+def main():
+    start_time = time.time()
+    file_path = "names.txt"
+
+    if not os.path.exists(file_path):
+        print(f"Error: File '{file_path}' not found.")
+        return
+
+    with open(file_path, 'r', encoding='utf-8') as file:
+        lines = file.readlines()
+
+    if not lines:
+        print(f"Error: '{file_path}' is empty.")
+        return
+
+    # Ensure the output folder exists
+    os.makedirs(DEEZE_AUDIO_FOLDER, exist_ok=True)
+
+    # Filter out empty lines
+    lines = [line.strip() for line in lines if line.strip()]
+    total_count = len(lines)
+
+    print(f"Found {total_count} songs to process")
+
+    # Determine number of worker threads (I/O bound, so we can use more threads than CPUs)
+    # Use ThreadPoolExecutor since this is I/O bound work
+    num_workers = min(32, total_count, multiprocessing.cpu_count() * 4)
+    print(f"Starting parallel processing with {num_workers} workers...")
+
+    results = []
+    with ThreadPoolExecutor(max_workers=num_workers) as executor:
+        # Submit all tasks
+        future_to_song = {executor.submit(
+            process_song, line): line for line in lines}
+
+        # Process results as they complete
+        for future in future_to_song:
+            results.append(future.result())
+
+    success_count = sum(1 for result in results if result)
+
+    elapsed = time.time() - start_time
+    print(
+        f"\nCompleted: {success_count} of {total_count} songs downloaded successfully.")
+    print(f"Total elapsed time: {elapsed:.2f} seconds")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,5 +1,7 @@
 audio_files/
-audio_files_1
+audio_files_1/
+audio_files_2/
 audio_files_all
 results/
 processed_results/
+__pycache__/

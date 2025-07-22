@@ -19,13 +19,25 @@ try:
     import tkinter as tk
     from tkinter import ttk
     from tkinter import font as tkfont
+    # Add messagebox for error handling
+    from tkinter import messagebox
 except ImportError as exc:
     raise RuntimeError(
-        "Tkinter isn’t available on your Python installation.") from exc
+        "Tkinter isn't available on your Python installation.") from exc
+
+# Import pygame for audio playback
+try:
+    import pygame
+except ImportError as exc:
+    raise RuntimeError(
+        "Pygame isn't available. Install with 'pip install pygame'") from exc
+
+# Initialize pygame mixer
+pygame.mixer.init()
 
 
 def build_group_weights(n_mfcc: int = fv.n_mfcc, n_mels: int = fv.n_mels) -> np.ndarray:
-    group_sizes = [2 * n_mfcc, 2 * n_mels, 2, 2, 2]
+    group_sizes = [2 * n_mfcc, 2 * n_mels, 2, 2]
     total_dims = sum(group_sizes)
     w = np.ones(total_dims, dtype=np.float32)
     idx = 0
@@ -46,16 +58,16 @@ def run_kmeans_clustering(
     n_mels: int = fv.n_mels,
 ):
     os.makedirs(results_dir, exist_ok=True)
-    wav_files = glob.glob(os.path.join(audio_dir, "*.wav"))
-    if not wav_files:
-        raise FileNotFoundError(f"No *.wav under {audio_dir!r}.")
+    audio_files = glob.glob(os.path.join(audio_dir, "*.mp3"))
+    if not audio_files:
+        raise FileNotFoundError(f"No *.mp3 under {audio_dir!r}.")
 
     file_names, feature_vectors = [], []
-    for wav_path in wav_files:
-        base = Path(wav_path).stem
+    for audio_path in audio_files:
+        base = Path(audio_path).stem
         feats = {k: os.path.join(results_dir, f"{base}_{k}.npy") for k in [
             "mfcc", "melspectrogram", "spectral_centroid",
-            "spectral_flatness", "zero_crossing_rate",
+            "zero_crossing_rate",
         ]}
         if not all(os.path.isfile(p) for p in feats.values()):
             continue
@@ -106,11 +118,17 @@ def run_kmeans_clustering(
     return df, coords, labels
 
 
-def launch_ui(df: pd.DataFrame, coords: np.ndarray, labels: np.ndarray, top_n: int = 5):
+def launch_ui(df: pd.DataFrame, coords: np.ndarray, labels: np.ndarray, top_n: int = 5, audio_dir: str = "audio_files"):
     root = tk.Tk()
     root.title("🎵 Audio Recommendation System")
     root.geometry("900x600")
     root.minsize(720, 480)
+
+    # Store the audio directory
+    audio_folder = audio_dir
+
+    # Track currently playing song
+    current_song = {"name": None, "playing": False}
 
     style = ttk.Style(root)
     if "clam" in style.theme_names():
@@ -143,6 +161,12 @@ def launch_ui(df: pd.DataFrame, coords: np.ndarray, labels: np.ndarray, top_n: i
     song_list.config(yscrollcommand=scroll_songs.set)
     song_list.pack(side="left", fill="both", expand=True)
     scroll_songs.pack(side="right", fill="y")
+
+    # Add play button for selected song
+    play_button_frame = ttk.Frame(left)
+    play_button_frame.pack(fill="x", pady=5)
+    play_button = ttk.Button(play_button_frame, text="▶️ Play Selected")
+    play_button.pack(fill="x")
 
     for name in df["Song"]:
         song_list.insert("end", name)
@@ -183,6 +207,19 @@ def launch_ui(df: pd.DataFrame, coords: np.ndarray, labels: np.ndarray, top_n: i
     rec_list.config(yscrollcommand=scroll_rec.set)
     rec_list.pack(fill="both", expand=True, pady=(0, 5))
     scroll_rec.pack(fill="y", side="right")
+
+    # Add play button for recommendations
+    rec_play_frame = ttk.Frame(right)
+    rec_play_frame.pack(fill="x", pady=5)
+    rec_play_button = ttk.Button(rec_play_frame, text="▶️ Play Recommendation")
+    rec_play_button.pack(fill="x")
+
+    # Now playing indicator
+    now_playing_var = tk.StringVar()
+    now_playing_var.set("Now Playing: None")
+    now_playing_label = ttk.Label(
+        root, textvariable=now_playing_var, font=normal_font)
+    now_playing_label.pack(side="bottom", fill="x", padx=10, pady=5)
 
     distances = np.linalg.norm(coords[:, None] - coords[None, :], axis=2)
 
@@ -234,7 +271,69 @@ def launch_ui(df: pd.DataFrame, coords: np.ndarray, labels: np.ndarray, top_n: i
             rec_list.insert("end", df.at[i, "Song"])
         redraw_plot(sel_idx, order)
 
+    def play_audio(song_name):
+        """Play the audio file associated with the song name."""
+        # Stop any currently playing song
+        pygame.mixer.music.stop()
+
+        # Update the current song information
+        if current_song["name"] == song_name and current_song["playing"]:
+            # Toggle pause/play
+            current_song["playing"] = False
+            now_playing_var.set("Now Playing: None")
+            return
+
+        # Find the mp3 file
+        song_file = os.path.join(audio_folder, f"{song_name}.mp3")
+        if not os.path.exists(song_file):
+            messagebox.showerror("Error", f"Audio file not found: {song_file}")
+            return
+
+        try:
+            pygame.mixer.music.load(song_file)
+            pygame.mixer.music.play()
+            current_song["name"] = song_name
+            current_song["playing"] = True
+            now_playing_var.set(f"Now Playing: {song_name}")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to play audio: {e}")
+
+    def play_selected_song():
+        """Play the selected song from the song list."""
+        sel = song_list.curselection()
+        if not sel:
+            messagebox.showinfo("Info", "Please select a song first")
+            return
+        song_name = song_list.get(sel)
+        play_audio(song_name)
+
+    def play_recommended_song():
+        """Play the selected song from the recommendations list."""
+        sel = rec_list.curselection()
+        if not sel:
+            messagebox.showinfo("Info", "Please select a recommendation first")
+            return
+        song_name = rec_list.get(sel)
+        play_audio(song_name)
+
+    # Bind double-click on songs to play
+    song_list.bind("<Double-1>", lambda event: play_selected_song())
+    rec_list.bind("<Double-1>", lambda event: play_recommended_song())
+
+    # Connect play buttons
+    play_button.config(command=play_selected_song)
+    rec_play_button.config(command=play_recommended_song)
+
+    # Bind single-click for selection
     song_list.bind("<<ListboxSelect>>", on_song_select)
+
+    # Clean up when closing
+    def on_closing():
+        pygame.mixer.music.stop()
+        pygame.mixer.quit()
+        root.destroy()
+
+    root.protocol("WM_DELETE_WINDOW", on_closing)
 
     root.mainloop()
 
@@ -247,4 +346,4 @@ if __name__ == "__main__":
         dynamic_cluster_selection=True,
     )
 
-    launch_ui(DF, COORDS, LABELS)
+    launch_ui(DF, COORDS, LABELS, audio_dir="audio_files")
