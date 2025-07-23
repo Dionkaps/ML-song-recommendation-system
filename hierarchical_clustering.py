@@ -6,11 +6,10 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from sklearn.cluster import KMeans
+from scipy.cluster.hierarchy import linkage, fcluster, dendrogram
 from sklearn.decomposition import PCA
-from sklearn.metrics import silhouette_score, silhouette_samples
 from sklearn.preprocessing import StandardScaler
-from sklearn.exceptions import ConvergenceWarning
+from sklearn.metrics import silhouette_score
 
 import matplotlib
 import matplotlib.pyplot as plt
@@ -35,17 +34,23 @@ def build_group_weights(n_mfcc: int = fv.n_mfcc, n_mels: int = fv.n_mels, includ
     return w
 
 
-def run_kmeans_clustering(
+def run_hierarchical_clustering(
     audio_dir: str = "genres_original",
     results_dir: str = "results",
     n_clusters: int = 3,
     dynamic_cluster_selection: bool = False,
     dynamic_k_min: int = 2,
     dynamic_k_max: int = 10,
+    linkage_method: str = "ward",  # Options: 'ward', 'complete', 'average', 'single'
     n_mfcc: int = fv.n_mfcc,
     n_mels: int = fv.n_mels,
     include_genre: bool = True,
 ):
+    # Create a dedicated folder for hierarchical clustering results
+    hierarchical_dir = "hierarchical"
+    os.makedirs(hierarchical_dir, exist_ok=True)
+    
+    # Original results_dir is still needed for finding feature files
     os.makedirs(results_dir, exist_ok=True)
     
     # Load genre mapping if it exists
@@ -133,48 +138,88 @@ def run_kmeans_clustering(
             f"Expected {len(weights)} dims after feature concat, got {X_scaled.shape[1]}")
     X = X_scaled * weights
 
+    # Perform hierarchical clustering
     if dynamic_cluster_selection:
         sil = {}
+        Z = linkage(X, method=linkage_method)
         for k in range(dynamic_k_min, dynamic_k_max + 1):
-            lbls_tmp = KMeans(n_clusters=k, random_state=42,
-                              n_init=10).fit_predict(X)
+            lbls_tmp = fcluster(Z, k, criterion='maxclust')
             sil[k] = silhouette_score(X, lbls_tmp)
         n_clusters = max(sil, key=sil.get)
         print(f"Optimal k (silhouette) → {n_clusters}")
 
-    km = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
-    labels = km.fit_predict(X)
-    centers = km.cluster_centers_
+    # Perform final clustering with optimal or specified number of clusters
+    Z = linkage(X, method=linkage_method)
+    labels = fcluster(Z, n_clusters, criterion='maxclust') - 1  # Zero-based indexing
+    
+    # Calculate cluster centers
+    centers = np.zeros((n_clusters, X.shape[1]))
+    for i in range(n_clusters):
+        cluster_points = X[labels == i]
+        if len(cluster_points) > 0:
+            centers[i] = np.mean(cluster_points, axis=0)
 
+    # Apply PCA for visualization
     coords = PCA(n_components=2, random_state=42).fit_transform(X)
 
+    # Create DataFrame with results
     df = pd.DataFrame({
         "Song": file_names,
         "Genre": genres,
         "Cluster": labels,
-        "Distance": np.linalg.norm(X - centers[labels], axis=1),
+        "Distance": [np.linalg.norm(X[i] - centers[labels[i]]) for i in range(len(X))],
         "PCA1": coords[:, 0],
         "PCA2": coords[:, 1],
     })
-    csv_path = os.path.join("audio_clustering_results.csv")
+    csv_path = os.path.join(hierarchical_dir, "hierarchical_clustering_results.csv")
     df.to_csv(csv_path, index=False)
     print(f"Results written to → {csv_path}")
+
+    # Optional: Plot dendrogram
+    plt.figure(figsize=(12, 8))
+    dendrogram(Z)
+    plt.title('Hierarchical Clustering Dendrogram')
+    plt.xlabel('Sample index')
+    plt.ylabel('Distance')
+    dendrogram_path = os.path.join(hierarchical_dir, "dendrogram.png")
+    plt.savefig(dendrogram_path)
+    plt.close()
+    print(f"Dendrogram saved to → {dendrogram_path}")
+
+    # Plot clusters in 2D space
+    plt.figure(figsize=(10, 8))
+    colors = plt.cm.tab10(np.linspace(0, 1, n_clusters))
+    
+    for i in range(n_clusters):
+        cluster_points = coords[labels == i]
+        plt.scatter(cluster_points[:, 0], cluster_points[:, 1], 
+                   color=colors[i], label=f'Cluster {i+1}', alpha=0.7)
+    
+    plt.title('Hierarchical Clustering Result (PCA)')
+    plt.xlabel('PC1')
+    plt.ylabel('PC2')
+    plt.legend()
+    plt.grid(True, linestyle='--', alpha=0.7)
+    
+    clusters_plot_path = os.path.join(hierarchical_dir, "hierarchical_clusters.png")
+    plt.savefig(clusters_plot_path)
+    plt.close()
+    print(f"Clusters plot saved to → {clusters_plot_path}")
 
     return df, coords, labels
 
 
-# Import the UI launcher from the modern_ui module
-from modern_ui import launch_ui
-
-
 if __name__ == "__main__":
-    DF, COORDS, LABELS = run_kmeans_clustering(
-        audio_dir="genres_original",
-        results_dir="results",
-        n_clusters=5,  # More clusters for genre data
-        dynamic_cluster_selection=True,
-        include_genre=True,
-    )
-
-    # Launch the UI using the imported function
-    launch_ui(DF, COORDS, LABELS, audio_dir="genres_original", clustering_method="K-means")
+    try:
+        from modern_ui import launch_ui
+        df, coords, labels = run_hierarchical_clustering(
+            audio_dir="genres_original",
+            results_dir="results",
+            n_clusters=5,  # More clusters for genre data
+            include_genre=True,
+        )
+        launch_ui(df, coords, labels, top_n=5, audio_dir="genres_original", clustering_method="Hierarchical")
+    except Exception as e:
+        print(f"Error launching UI: {e}")
+        print("Running clustering without UI...")
+        run_hierarchical_clustering(audio_dir="genres_original")

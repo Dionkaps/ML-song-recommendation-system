@@ -190,7 +190,7 @@ This module performs clustering on the processed features and provides a recomme
 
 **File:** `run_pipeline.py`
 
-This module orchestrates the entire pipeline execution, allowing for specific steps to be skipped if desired.
+This module orchestrates the entire pipeline execution, allowing for specific steps to be skipped if desired. It also lets you choose between different clustering algorithms.
 
 **Process Flow:**
 
@@ -245,13 +245,19 @@ The `feature_vars.py` file defines the following constants:
    - Higher for percussive sounds and consonants
    - Useful for rhythm analysis and voice/music discrimination
 
-### Clustering Approach
+### Clustering Approaches
 
-The system uses:
-- K-means clustering to group songs with similar audio characteristics
-- PCA for dimensionality reduction and visualization
-- Weighted feature combination to balance different feature types
-- Optional dynamic cluster number selection using silhouette score
+The system supports multiple clustering algorithms:
+
+#### K-means Clustering
+- Groups songs with similar audio characteristics
+- Uses weighted feature combination (WKBSC algorithm)
+- Supports dynamic cluster number selection using silhouette score
+
+#### Hierarchical Clustering
+- Creates a hierarchy of clusters using agglomerative approach
+- Supports different linkage methods (ward, complete, average, single)
+- Offers various distance metrics (euclidean, cityblock, cosine, correlation)
 
 ## Usage
 
@@ -261,6 +267,11 @@ The system uses:
 2. **Run Complete Pipeline**
    ```
    python run_pipeline.py
+   ```
+   
+   - Choose clustering algorithm:
+   ```
+   python run_pipeline.py --cluster-algorithm hierarchical
    ```
 
 3. **Run Specific Steps**
@@ -273,7 +284,10 @@ The system uses:
    - Download audio: `python playlist_audio_download.py`
    - Extract features: `python extract_features.py`
    - Create visualizations: `python ploting.py results`
-   - Cluster and recommend: `python kmeans.py`
+   - Cluster and recommend: 
+     - K-means: `python kmeans.py`
+     - Hierarchical: `python hierarchical.py`
+     - Advanced options: `python cluster.py --algorithm hierarchical --linkage-method ward --n-clusters 5`
 
 5. **View Recommendations**
    - After running `kmeans.py`, a graphical UI will open

@@ -4,9 +4,11 @@ import sys
 import re
 import time
 import multiprocessing
+import csv
 from concurrent.futures import ThreadPoolExecutor
 
 DEEZE_AUDIO_FOLDER = "audio_files"
+SONGS_DATA_CSV = "songs_data.csv"
 
 
 def search_song(song_name):
@@ -67,7 +69,7 @@ def process_song(song_line):
 
             song = search_song(search_query)
             if not song:
-                return False
+                return None
 
             # Rest of the function continues here with the song object
             title = song.get('title', 'Unknown')
@@ -76,7 +78,7 @@ def process_song(song_line):
 
             if not preview_url:
                 print(f"No preview available for {title} by {artist}")
-                return False
+                return None
 
             print(f"Found: {title} by {artist}")
 
@@ -95,14 +97,14 @@ def process_song(song_line):
 
             if success:
                 print(f"Download complete! Saved to {output_file}")
-                return True
+                return {"title": title, "artist": artist, "filename": valid_filename + ".mp3"}
             else:
                 print("Download failed")
-                return False
+                return None
 
         if len(parts) != 2:
             print(f"Invalid format in line: {song_line}")
-            return False
+            return None
 
         # Original code for when there is artist information
         song_name = parts[0].strip()
@@ -113,7 +115,7 @@ def process_song(song_line):
 
         song = search_song(search_query)
         if not song:
-            return False
+            return None
 
         # Display song info
         title = song.get('title', 'Unknown')
@@ -122,7 +124,7 @@ def process_song(song_line):
 
         if not preview_url:
             print(f"No preview available for {title} by {artist}")
-            return False
+            return None
 
         print(f"Found: {title} by {artist}")
 
@@ -140,13 +142,36 @@ def process_song(song_line):
 
         if success:
             print(f"Download complete! Saved to {output_file}")
-            return True
+            return {"title": title, "artist": artist, "filename": valid_filename + ".mp3"}
         else:
             print("Download failed")
-            return False
+            return None
     except Exception as e:
         print(f"Error processing song '{song_line}': {str(e)}")
-        return False
+        return None
+
+
+def save_songs_to_csv(songs_data, filename):
+    """Save the songs data to a CSV file"""
+    # Filter out None values
+    songs_data = [song for song in songs_data if song]
+
+    if not songs_data:
+        print("No song data to save.")
+        return
+
+    try:
+        with open(filename, 'w', newline='', encoding='utf-8') as csvfile:
+            fieldnames = ['title', 'artist', 'filename']
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+
+            writer.writeheader()
+            for song in songs_data:
+                writer.writerow(song)
+
+        print(f"Successfully saved {len(songs_data)} songs to {filename}")
+    except Exception as e:
+        print(f"Error saving data to CSV: {str(e)}")
 
 
 def main():
@@ -178,7 +203,7 @@ def main():
     num_workers = min(32, total_count, multiprocessing.cpu_count() * 4)
     print(f"Starting parallel processing with {num_workers} workers...")
 
-    results = []
+    songs_data = []
     with ThreadPoolExecutor(max_workers=num_workers) as executor:
         # Submit all tasks
         future_to_song = {executor.submit(
@@ -186,14 +211,19 @@ def main():
 
         # Process results as they complete
         for future in future_to_song:
-            results.append(future.result())
+            songs_data.append(future.result())
 
-    success_count = sum(1 for result in results if result)
+    # Count successful downloads
+    success_count = sum(1 for result in songs_data if result)
+
+    # Save song data to CSV
+    save_songs_to_csv(songs_data, SONGS_DATA_CSV)
 
     elapsed = time.time() - start_time
     print(
         f"\nCompleted: {success_count} of {total_count} songs downloaded successfully.")
     print(f"Total elapsed time: {elapsed:.2f} seconds")
+    print(f"Song data saved to {SONGS_DATA_CSV}")
 
 
 if __name__ == "__main__":

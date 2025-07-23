@@ -56,11 +56,16 @@ def extract_zero_crossing_rate(y, hop_length=fv.hop_length):
 def process_file(audio_path, results_dir, n_mfcc, n_fft, hop_length, n_mels):
     """
     Load an audio file, extract features, and save them to .npy files.
+    Also extracts and saves the genre information.
     """
     filename = os.path.basename(audio_path)
     base_filename = os.path.splitext(filename)[0]
+    
+    # Extract genre from the parent folder name
+    genre = os.path.basename(os.path.dirname(audio_path))
+    
     try:
-        print(f"Loading {filename}...")
+        print(f"Loading {filename} (genre: {genre})...")
         
         # Suppress stderr output during audio loading to hide mpg123 warnings
         with suppress_stderr():
@@ -83,22 +88,51 @@ def process_file(audio_path, results_dir, n_mfcc, n_fft, hop_length, n_mels):
                 f"{base_filename}_spectral_flatness.npy"), spec_flatness)
         np.save(os.path.join(results_dir,
                 f"{base_filename}_zero_crossing_rate.npy"), zcr)
+        
+        # Save genre information
+        np.save(os.path.join(results_dir, f"{base_filename}_genre.npy"), np.array([genre]))
 
         print(f"Finished processing {filename}")
+        return base_filename, genre
     except Exception as e:
         print(f"Error processing {filename}: {e}")
+        return None
 
 
-def run_feature_extraction(audio_dir='audio_files', results_dir='results'):
+def run_feature_extraction(audio_dir='genres_original', results_dir='results'):
     """
-    Finds all .mp3 files in the audio_dir and processes them in parallel.
+    Finds all .wav files in the genre folders under audio_dir and processes them in parallel.
     """
     os.makedirs(results_dir, exist_ok=True)
-    audio_files = glob.glob(os.path.join(audio_dir, "*.mp3"))
-    if not audio_files:
-        print(f"No .mp3 files found in {audio_dir}.")
+    
+    # Get all genre directories
+    genre_dirs = [d for d in glob.glob(os.path.join(audio_dir, "*")) if os.path.isdir(d)]
+    if not genre_dirs:
+        print(f"No genre directories found in {audio_dir}.")
         return
-
+        
+    # Collect all .wav files from all genre directories
+    audio_files = []
+    genre_map = {}  # To store mapping of filenames to genres
+    
+    for genre_dir in genre_dirs:
+        genre_name = os.path.basename(genre_dir)
+        wav_files = glob.glob(os.path.join(genre_dir, "*.wav"))
+        
+        for wav_file in wav_files:
+            audio_files.append(wav_file)
+            base_filename = os.path.splitext(os.path.basename(wav_file))[0]
+            genre_map[base_filename] = genre_name
+            
+        print(f"Found {len(wav_files)} .wav files in {genre_name} genre.")
+    
+    if not audio_files:
+        print(f"No .wav files found in genre directories under {audio_dir}.")
+        return
+        
+    # Save the genre mapping for later use
+    np.save(os.path.join(results_dir, "genre_map.npy"), genre_map)
+    print(f"Saved genre mapping for {len(genre_map)} files")
 
     # Determine number of worker processes
     num_workers = min(len(audio_files), multiprocessing.cpu_count())
@@ -118,9 +152,24 @@ def run_feature_extraction(audio_dir='audio_files', results_dir='results'):
             )
             for audio_path in audio_files
         ]
-        # Wait for all to complete
+        
+        # Wait for all to complete and collect genre information
         for future in futures:
-            future.result()
+            result = future.result()
+            if result:
+                base_filename, genre = result
+                genre_map[base_filename] = genre
+    
+    # Save the genre mapping to a file
+    np.save(os.path.join(results_dir, "genre_map.npy"), genre_map)
+    print(f"Genre mapping saved to {os.path.join(results_dir, 'genre_map.npy')}")
+    
+    # Also save as CSV for easy inspection
+    with open(os.path.join(results_dir, "genre_map.csv"), "w") as f:
+        f.write("filename,genre\n")
+        for filename, genre in genre_map.items():
+            f.write(f"{filename},{genre}\n")
+    print(f"Genre mapping also saved to CSV: {os.path.join(results_dir, 'genre_map.csv')}")
 
 
 def main():

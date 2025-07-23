@@ -5,3 +5,5 @@ audio_files_all
 results/
 processed_results/
 __pycache__/
+genres_original/
+.vscode/

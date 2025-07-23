@@ -62,10 +62,23 @@ def plot_feature(feature, y, sr, hop_length,
     else:
         plt.show()
 
-def run_plotting(audio_dir='audio_files', results_dir='results'):
-    wav_files = glob.glob(os.path.join(audio_dir, "*.wav"))
+def run_plotting(audio_dir='genres_original', results_dir='results'):
+    # Get all genre directories
+    genre_dirs = [d for d in glob.glob(os.path.join(audio_dir, "*")) if os.path.isdir(d)]
+    if not genre_dirs:
+        print(f"No genre directories found in {audio_dir}.")
+        return
+        
+    # Collect all .wav files from all genre directories
+    wav_files = []
+    for genre_dir in genre_dirs:
+        genre_name = os.path.basename(genre_dir)
+        genre_wav_files = glob.glob(os.path.join(genre_dir, "*.wav"))
+        wav_files.extend(genre_wav_files)
+        print(f"Found {len(genre_wav_files)} .wav files in {genre_name} genre.")
+    
     if not wav_files:
-        print("No .wav files found in the audio_files directory.")
+        print("No .wav files found in any genre directory.")
         return
 
     for wav_path in wav_files:
