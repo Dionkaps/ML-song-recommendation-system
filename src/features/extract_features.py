@@ -4,12 +4,17 @@ import multiprocessing
 import time
 import warnings
 from concurrent.futures import ProcessPoolExecutor
-import feature_vars as fv
+from pathlib import Path
+import sys
+
+# Add parent directories to path for imports
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+from config import feature_vars as fv
+
 import librosa
 import numpy as np
 import contextlib
 import io
-import sys
 
 # Suppress specific warnings
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -99,7 +104,7 @@ def process_file(audio_path, results_dir, n_mfcc, n_fft, hop_length, n_mels):
         return None
 
 
-def run_feature_extraction(audio_dir='genres_original', results_dir='results'):
+def run_feature_extraction(audio_dir='genres_original', results_dir='output/results'):
     """
     Finds all .wav files in the genre folders under audio_dir and processes them in parallel.
     """

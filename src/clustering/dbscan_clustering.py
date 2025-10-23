@@ -15,8 +15,10 @@ from sklearn.neighbors import NearestNeighbors
 import matplotlib
 import matplotlib.pyplot as plt
 
-import feature_vars as fv
-from modern_ui import launch_ui
+# Add parent directories to path for imports
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+from config import feature_vars as fv
+from src.ui.modern_ui import launch_ui
 
 
 def build_group_weights(n_mfcc: int = fv.n_mfcc, n_mels: int = fv.n_mels, include_genre: bool = True) -> np.ndarray:
@@ -301,7 +303,7 @@ if __name__ == "__main__":
         # shift all labels up by 1, making noise points = cluster 0
         df, coords, labels_original = run_dbscan_clustering(
             audio_dir="genres_original",
-            results_dir="results",
+            results_dir="output/results",
             auto_eps=True,
             min_samples=4,
             include_genre=True,

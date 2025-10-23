@@ -14,7 +14,9 @@ from sklearn.metrics import silhouette_score
 import matplotlib
 import matplotlib.pyplot as plt
 
-import feature_vars as fv
+# Add parent directories to path for imports
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+from config import feature_vars as fv
 
 
 def build_group_weights(n_mfcc: int = fv.n_mfcc, n_mels: int = fv.n_mels, include_genre: bool = True) -> np.ndarray:
@@ -211,10 +213,10 @@ def run_hierarchical_clustering(
 
 if __name__ == "__main__":
     try:
-        from modern_ui import launch_ui
+        from src.ui.modern_ui import launch_ui
         df, coords, labels = run_hierarchical_clustering(
             audio_dir="genres_original",
-            results_dir="results",
+            results_dir="output/results",
             n_clusters=5,  # More clusters for genre data
             include_genre=True,
         )

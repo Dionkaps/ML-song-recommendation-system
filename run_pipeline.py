@@ -39,15 +39,15 @@ def main():
     if "download" not in args.skip:
         print("Using pre-existing genre data from genres_original folder.")
         # The download step is skipped since we're using pre-existing data
-        # run([py, "playlist_audio_download.py"])
-        # run([py, "deezer-song.py"])
+        # run([py, "src/data_collection/playlist_audio_download.py"])
+        # run([py, "src/data_collection/deezer-song.py"])
 
     if "extract" not in args.skip:
-        run([py, "extract_features.py"])
+        run([py, "src/features/extract_features.py"])
 
     if "plot" not in args.skip:
-        run([py, "ploting.py", "results"])
-        run([py, "ploting.py", "processed_results"])
+        run([py, "scripts/ploting.py", "output/results"])
+        run([py, "scripts/ploting.py", "processed_results"])
 
     if "cluster" not in args.skip:
         # Interactive selection if not specified in command line
@@ -73,17 +73,17 @@ def main():
         
         if args.clustering_method == "kmeans":
             print("\nUsing K-Means clustering method")
-            run([py, "kmeans.py"])
+            run([py, "src/clustering/kmeans.py"])
         elif args.clustering_method == "hierarchical":
             print("\nUsing Hierarchical clustering method")
-            run([py, "hierarchical_clustering.py"])
+            run([py, "src/clustering/hierarchical_clustering.py"])
         elif args.clustering_method == "dbscan":
             print("\nUsing DBSCAN clustering method")
-            run([py, "dbscan_clustering.py"])
+            run([py, "src/clustering/dbscan_clustering.py"])
         else:
             print(f"\nPlease select a valid clustering method: kmeans, hierarchical, or dbscan")
             print("Using default K-Means clustering method")
-            run([py, "kmeans.py"])
+            run([py, "src/clustering/kmeans.py"])
 
 
 if __name__ == "__main__":

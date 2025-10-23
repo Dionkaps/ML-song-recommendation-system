@@ -15,7 +15,9 @@ from sklearn.exceptions import ConvergenceWarning
 import matplotlib
 import matplotlib.pyplot as plt
 
-import feature_vars as fv
+# Add parent directories to path for imports
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+from config import feature_vars as fv
 
 
 def build_group_weights(n_mfcc: int = fv.n_mfcc, n_mels: int = fv.n_mels, include_genre: bool = True) -> np.ndarray:
@@ -164,13 +166,13 @@ def run_kmeans_clustering(
 
 
 # Import the UI launcher from the modern_ui module
-from modern_ui import launch_ui
+from src.ui.modern_ui import launch_ui
 
 
 if __name__ == "__main__":
     DF, COORDS, LABELS = run_kmeans_clustering(
         audio_dir="genres_original",
-        results_dir="results",
+        results_dir="output/results",
         n_clusters=5,  # More clusters for genre data
         dynamic_cluster_selection=True,
         include_genre=True,
