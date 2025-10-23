@@ -25,8 +25,9 @@ def main():
     )
     parser.add_argument(
         "--clustering-method",
-        choices=["kmeans", "hierarchical", "dbscan"],
-        help="The clustering method to use.",
+        choices=["kmeans"],
+        default="kmeans",
+        help="The clustering method to use (only K-Means is currently supported).",
     )
     args = parser.parse_args()
 
@@ -46,44 +47,24 @@ def main():
         run([py, "src/features/extract_features.py"])
 
     if "plot" not in args.skip:
-        run([py, "scripts/ploting.py", "output/results"])
-        run([py, "scripts/ploting.py", "processed_results"])
+        plot_targets = ["output/results"]
+        processed_dir = here / "output" / "processed_results"
+        if processed_dir.exists():
+            plot_targets.append("output/processed_results")
+        else:
+            print(f"Skipping plotting for {processed_dir} (directory not found).")
+
+        for target in plot_targets:
+            run([py, "scripts/ploting.py", target])
 
     if "cluster" not in args.skip:
-        # Interactive selection if not specified in command line
-        if args.clustering_method is None:
-            print("\nPlease select a clustering method:")
-            print("1. K-Means Clustering")
-            print("2. Hierarchical Clustering")
-            print("3. DBSCAN Clustering")
-            
-            while True:
-                choice = input("Enter your choice (1, 2, or 3): ")
-                if choice == "1":
-                    args.clustering_method = "kmeans"
-                    break
-                elif choice == "2":
-                    args.clustering_method = "hierarchical"
-                    break
-                elif choice == "3":
-                    args.clustering_method = "dbscan"
-                    break
-                else:
-                    print("Invalid choice. Please enter 1, 2, or 3.")
-        
-        if args.clustering_method == "kmeans":
-            print("\nUsing K-Means clustering method")
-            run([py, "src/clustering/kmeans.py"])
-        elif args.clustering_method == "hierarchical":
-            print("\nUsing Hierarchical clustering method")
-            run([py, "src/clustering/hierarchical_clustering.py"])
-        elif args.clustering_method == "dbscan":
-            print("\nUsing DBSCAN clustering method")
-            run([py, "src/clustering/dbscan_clustering.py"])
-        else:
-            print(f"\nPlease select a valid clustering method: kmeans, hierarchical, or dbscan")
-            print("Using default K-Means clustering method")
-            run([py, "src/clustering/kmeans.py"])
+        # Only K-Means is supported, but keep the branch explicit for clarity.
+        if args.clustering_method != "kmeans":
+            print(
+                f"\nUnsupported clustering method '{args.clustering_method}'. Falling back to K-Means."
+            )
+        print("\nUsing K-Means clustering method")
+        run([py, "src/clustering/kmeans.py"])
 
 
 if __name__ == "__main__":

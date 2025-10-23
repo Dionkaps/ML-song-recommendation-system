@@ -10,8 +10,6 @@ The ML Song Recommendation System codebase has been reorganized into a clean, pr
 
 #### src/clustering/
 - `kmeans.py` - K-Means clustering algorithm
-- `hierarchical_clustering.py` - Hierarchical clustering
-- `dbscan_clustering.py` - DBSCAN clustering
 - `__init__.py` - Package initialization
 
 #### src/features/
@@ -20,7 +18,6 @@ The ML Song Recommendation System codebase has been reorganized into a clean, pr
 
 #### src/ui/
 - `modern_ui.py` - Main recommendation UI
-- `compare_ui.py` - Clustering comparison UI
 - `__init__.py` - Package initialization
 
 #### src/data_collection/
@@ -31,7 +28,6 @@ The ML Song Recommendation System codebase has been reorganized into a clean, pr
 ### 📁 scripts/ - Utility Scripts
 **Purpose**: Standalone utility and analysis scripts
 - `ploting.py` - Visualization utilities
-- `compare_clustering.py` - Clustering comparison analysis
 - `wkbsc.py` - Weighted K-means implementation
 
 ### 📁 config/ - Configuration Files
@@ -43,8 +39,6 @@ The ML Song Recommendation System codebase has been reorganized into a clean, pr
 ### 📁 output/ - Output and Results
 **Purpose**: Generated files and analysis results
 - `output/results/` - Main results (features, plots, metrics)
-- `output/dbscan/` - DBSCAN-specific results
-- `output/hierarchical/` - Hierarchical clustering results
 - `output/spectral/` - Spectral clustering results
 
 ### 📁 docs/ - Documentation
@@ -70,22 +64,16 @@ Old Location → New Location
 ─────────────────────────────────────────────────────
 extract_features.py → src/features/
 kmeans.py → src/clustering/
-hierarchical_clustering.py → src/clustering/
-dbscan_clustering.py → src/clustering/
 modern_ui.py → src/ui/
-compare_ui.py → src/ui/
 playlist_audio_download.py → src/data_collection/
 deezer-song.py → src/data_collection/
 ploting.py → scripts/
-compare_clustering.py → scripts/
 wkbsc.py → scripts/
 feature_vars.py → config/
 names.txt → config/
 links.txt → config/
 README.md → docs/ (detailed docs)
 results/* → output/results/
-dbscan/* → output/dbscan/
-hierarchical/* → output/hierarchical/
 spectral/* → output/spectral/
 audio_clustering_results.csv → output/
 songs_data.csv → output/
@@ -129,8 +117,6 @@ results_dir="output/results"
 - `src/ui/__init__.py` - UI package
 - `src/data_collection/__init__.py` - Data collection package
 - `output/results/.gitkeep` - Preserve directory in git
-- `output/dbscan/.gitkeep` - Preserve directory in git
-- `output/hierarchical/.gitkeep` - Preserve directory in git
 - `output/spectral/.gitkeep` - Preserve directory in git
 - `README.md` (root) - Quick start guide
 - `requirements.txt` - Dependencies list
@@ -176,11 +162,8 @@ python src/features/extract_features.py
 
 # Clustering algorithms
 python src/clustering/kmeans.py
-python src/clustering/hierarchical_clustering.py
-python src/clustering/dbscan_clustering.py
 
 # Utilities
-python scripts/compare_clustering.py
 python scripts/wkbsc.py
 ```
 

@@ -1,6 +1,8 @@
 import argparse
 import glob
 import os
+from pathlib import Path
+
 import librosa
 from matplotlib import pyplot as plt
 import numpy as np
@@ -54,19 +56,27 @@ def plot_feature(feature, y, sr, hop_length,
 
     plt.tight_layout()
     if output_dir and base_filename:
+        output_dir = Path(output_dir)
         plot_filename = f"{base_filename}_{feature_type}.png"
-        plot_path = os.path.join(output_dir, plot_filename)
+        plot_path = output_dir / plot_filename
         plt.savefig(plot_path)
         print(f"Plot saved to: {plot_path}")
         plt.close()
     else:
         plt.show()
 
-def run_plotting(audio_dir='genres_original', results_dir='results'):
+def run_plotting(audio_dir='genres_original', results_dir='output/results'):
+    audio_dir_path = Path(audio_dir)
+    results_dir_path = Path(results_dir)
+
+    if not results_dir_path.exists():
+        print(f"Results directory {results_dir_path} not found. Skipping plotting.")
+        return
+
     # Get all genre directories
-    genre_dirs = [d for d in glob.glob(os.path.join(audio_dir, "*")) if os.path.isdir(d)]
+    genre_dirs = [d for d in glob.glob(str(audio_dir_path / "*")) if Path(d).is_dir()]
     if not genre_dirs:
-        print(f"No genre directories found in {audio_dir}.")
+        print(f"No genre directories found in {audio_dir_path}.")
         return
         
     # Collect all .wav files from all genre directories
@@ -81,21 +91,21 @@ def run_plotting(audio_dir='genres_original', results_dir='results'):
         print("No .wav files found in any genre directory.")
         return
 
+    is_processed = results_dir_path.name == "processed_results"
+    suffix = "_processed.npy" if is_processed else ".npy"
+
     for wav_path in wav_files:
         base_filename = os.path.splitext(os.path.basename(wav_path))[0]
         print(f"\nGenerating plots for: {base_filename}.wav")
-        is_processed = results_dir == "processed_results"
-        suffix = "_processed.npy" if is_processed else ".npy"
-
         feature_files = {
-            'mfcc': os.path.join(results_dir, f"{base_filename}_mfcc{suffix}"),
-            'melspectrogram': os.path.join(results_dir, f"{base_filename}_melspectrogram{suffix}"),
-            'spectral_centroid': os.path.join(results_dir, f"{base_filename}_spectral_centroid{suffix}"),
-            'spectral_flatness': os.path.join(results_dir, f"{base_filename}_spectral_flatness{suffix}"),
-            'zero_crossing_rate': os.path.join(results_dir, f"{base_filename}_zero_crossing_rate{suffix}")
+            'mfcc': results_dir_path / f"{base_filename}_mfcc{suffix}",
+            'melspectrogram': results_dir_path / f"{base_filename}_melspectrogram{suffix}",
+            'spectral_centroid': results_dir_path / f"{base_filename}_spectral_centroid{suffix}",
+            'spectral_flatness': results_dir_path / f"{base_filename}_spectral_flatness{suffix}",
+            'zero_crossing_rate': results_dir_path / f"{base_filename}_zero_crossing_rate{suffix}"
         }
 
-        missing_features = [ft for ft, path in feature_files.items() if not os.path.isfile(path)]
+        missing_features = [ft for ft, path in feature_files.items() if not path.is_file()]
         if missing_features:
             print(f"Missing feature files for '{base_filename}.wav': {', '.join(missing_features)}. Skipping.")
             continue
@@ -114,19 +124,19 @@ def run_plotting(audio_dir='genres_original', results_dir='results'):
             n_fft = 2048
 
             plot_feature(mfccs, y=y, sr=sr, hop_length=hop_length,
-                         feature_type='mfcc', output_dir=results_dir,
+                         feature_type='mfcc', output_dir=results_dir_path,
                          base_filename=base_filename)
             plot_feature(mel_spectrogram, y=y, sr=sr, hop_length=hop_length,
-                         feature_type='melspectrogram', output_dir=results_dir,
+                         feature_type='melspectrogram', output_dir=results_dir_path,
                          base_filename=base_filename)
             plot_feature(spectral_centroid, y=y, sr=sr, hop_length=hop_length,
                          feature_type='spectral_centroid', n_fft=n_fft,
-                         output_dir=results_dir, base_filename=base_filename)
+                         output_dir=results_dir_path, base_filename=base_filename)
             plot_feature(spectral_flatness, y=y, sr=sr, hop_length=hop_length,
-                         feature_type='spectral_flatness', output_dir=results_dir,
+                         feature_type='spectral_flatness', output_dir=results_dir_path,
                          base_filename=base_filename)
             plot_feature(zero_crossing_rate, y=y, sr=sr, hop_length=hop_length,
-                         feature_type='zero_crossing_rate', output_dir=results_dir,
+                         feature_type='zero_crossing_rate', output_dir=results_dir_path,
                          base_filename=base_filename)
 
             print(f"Plots saved for '{base_filename}.wav'.")
@@ -135,9 +145,12 @@ def run_plotting(audio_dir='genres_original', results_dir='results'):
 
 def main():
     parser = argparse.ArgumentParser(description="Plot audio features from extracted data.")
-    parser.add_argument("results_dir", nargs="?", default="results",
-                        choices=["results", "processed_results"],
-                        help="Specify the folder: 'results' or 'processed_results'")
+    parser.add_argument(
+        "results_dir",
+        nargs="?",
+        default="output/results",
+        help="Path to the folder containing feature arrays (default: output/results)"
+    )
     args = parser.parse_args()
     run_plotting(results_dir=args.results_dir)
 

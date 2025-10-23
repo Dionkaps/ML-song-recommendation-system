@@ -10,15 +10,12 @@ ML-song-recommendation-system/
 ├── src/                          # Main source code
 │   ├── clustering/               # Clustering algorithms
 │   │   ├── kmeans.py            # K-Means clustering implementation
-│   │   ├── hierarchical_clustering.py  # Hierarchical clustering
-│   │   └── dbscan_clustering.py # DBSCAN clustering
 │   │
 │   ├── features/                 # Feature extraction modules
 │   │   └── extract_features.py  # Audio feature extraction
 │   │
 │   ├── ui/                       # User interface modules
-│   │   ├── modern_ui.py         # Main UI for recommendations
-│   │   └── compare_ui.py        # UI for comparing clustering methods
+│   │   └── modern_ui.py         # Main UI for recommendations
 │   │
 │   └── data_collection/          # Data collection scripts
 │       ├── playlist_audio_download.py  # Download audio from YouTube
@@ -26,7 +23,6 @@ ML-song-recommendation-system/
 │
 ├── scripts/                      # Utility and analysis scripts
 │   ├── ploting.py               # Visualization scripts
-│   ├── compare_clustering.py    # Compare clustering methods
 │   └── wkbsc.py                 # Weighted K-means clustering
 │
 ├── config/                       # Configuration files
@@ -36,8 +32,6 @@ ML-song-recommendation-system/
 │
 ├── output/                       # Output files and results
 │   ├── results/                 # Main results directory
-│   ├── dbscan/                  # DBSCAN-specific results
-│   ├── hierarchical/            # Hierarchical clustering results
 │   └── spectral/                # Spectral clustering results
 │
 ├── genres_original/              # Original audio files by genre
@@ -75,24 +69,12 @@ python run_pipeline.py
 This will:
 - Extract audio features from files in `genres_original/`
 - Process and visualize the features
-- Run clustering algorithm (you'll be prompted to choose)
+- Run the weighted K-Means (WKBSC) clustering algorithm
 - Launch the recommendation UI
 
-### 3. Run Specific Clustering Methods
-
-**K-Means:**
+### 3. Run K-Means Directly
 ```bash
 python run_pipeline.py --clustering-method kmeans
-```
-
-**Hierarchical:**
-```bash
-python run_pipeline.py --clustering-method hierarchical
-```
-
-**DBSCAN:**
-```bash
-python run_pipeline.py --clustering-method dbscan
 ```
 
 ### 4. Skip Specific Steps
@@ -102,19 +84,16 @@ python run_pipeline.py --skip extract plot
 
 ## Features
 
-- **Multiple Clustering Algorithms**: K-Means, Hierarchical, DBSCAN
-- **Rich Audio Features**: MFCC, Mel-spectrograms, Spectral features
+- **Weighted K-Means**: K-Means enhanced with WKBSC feature weighting
+- **Rich Audio Features**: MFCC, Mel-spectrograms, spectral descriptors
 - **Interactive UI**: Browse songs, get recommendations, play audio
-- **Comparison Tools**: Compare different clustering methods
 - **Visualization**: PCA-based 2D visualization of clusters
 
 ## Module Details
 
 ### Clustering Algorithms
-- **K-Means** (`src/clustering/kmeans.py`): Standard K-means with dynamic cluster selection
-- **Hierarchical** (`src/clustering/hierarchical_clustering.py`): Agglomerative clustering with dendrograms
-- **DBSCAN** (`src/clustering/dbscan_clustering.py`): Density-based clustering for finding arbitrary-shaped clusters
-- **WKBSC** (`scripts/wkbsc.py`): Weighted K-means with feature importance learning
+- **K-Means** (`src/clustering/kmeans.py`): K-Means clustering with PCA for visualization
+- **WKBSC** (`scripts/wkbsc.py`): Weighted K-Means with feature importance learning
 
 ### Feature Extraction
 The system extracts these audio features:
@@ -141,17 +120,14 @@ n_mels = 128     # Number of mel bands
 python src/features/extract_features.py
 ```
 
-### Run Specific Clustering Algorithm
+### Run K-Means Directly
 ```bash
 python src/clustering/kmeans.py
-python src/clustering/hierarchical_clustering.py
-python src/clustering/dbscan_clustering.py
 ```
 
-### Compare Clustering Methods
+### Learn Feature Weights (WKBSC)
 ```bash
-python scripts/compare_clustering.py
-python src/ui/compare_ui.py
+python scripts/wkbsc.py
 ```
 
 ### Visualize Features
@@ -162,10 +138,8 @@ python scripts/ploting.py output/results
 ## Output Files
 
 - `output/results/`: Extracted features (.npy files)
-- `output/audio_clustering_results.csv`: K-means clustering results
-- `output/dbscan/dbscan_clustering_results.csv`: DBSCAN results
-- `output/hierarchical/hierarchical_clustering_results.csv`: Hierarchical results
-- `output/results/clustering_comparison.md`: Comparison report
+- `output/audio_clustering_results.csv`: K-Means clustering results
+- `output/results/wkbsc_feature_weights.npy`: Learned feature weights
 
 ## Requirements
 

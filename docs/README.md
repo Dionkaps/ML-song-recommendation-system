@@ -245,19 +245,14 @@ The `feature_vars.py` file defines the following constants:
    - Higher for percussive sounds and consonants
    - Useful for rhythm analysis and voice/music discrimination
 
-### Clustering Approaches
+### Clustering Approach
 
-The system supports multiple clustering algorithms:
+The system now focuses on a single, tuned clustering workflow.
 
-#### K-means Clustering
+#### K-Means Clustering
 - Groups songs with similar audio characteristics
 - Uses weighted feature combination (WKBSC algorithm)
 - Supports dynamic cluster number selection using silhouette score
-
-#### Hierarchical Clustering
-- Creates a hierarchy of clusters using agglomerative approach
-- Supports different linkage methods (ward, complete, average, single)
-- Offers various distance metrics (euclidean, cityblock, cosine, correlation)
 
 ## Usage
 
@@ -268,10 +263,9 @@ The system supports multiple clustering algorithms:
    ```
    python run_pipeline.py
    ```
-   
-   - Choose clustering algorithm:
+   - Optional explicit flag (defaults to K-Means):
    ```
-   python run_pipeline.py --cluster-algorithm hierarchical
+   python run_pipeline.py --clustering-method kmeans
    ```
 
 3. **Run Specific Steps**
@@ -281,13 +275,11 @@ The system supports multiple clustering algorithms:
    ```
 
 4. **Run Individual Components**
-   - Download audio: `python playlist_audio_download.py`
-   - Extract features: `python extract_features.py`
-   - Create visualizations: `python ploting.py results`
-   - Cluster and recommend: 
-     - K-means: `python kmeans.py`
-     - Hierarchical: `python hierarchical.py`
-     - Advanced options: `python cluster.py --algorithm hierarchical --linkage-method ward --n-clusters 5`
+   - Download audio: `python src/data_collection/playlist_audio_download.py`
+   - Extract features: `python src/features/extract_features.py`
+   - Create visualizations: `python scripts/ploting.py output/results`
+   - Learn feature weights: `python scripts/wkbsc.py`
+   - Cluster and recommend: `python src/clustering/kmeans.py`
 
 5. **View Recommendations**
    - After running `kmeans.py`, a graphical UI will open
