@@ -134,10 +134,6 @@ def run_feature_extraction(audio_dir='genres_original', results_dir='output/resu
     if not audio_files:
         print(f"No .wav files found in genre directories under {audio_dir}.")
         return
-        
-    # Save the genre mapping for later use
-    np.save(os.path.join(results_dir, "genre_map.npy"), genre_map)
-    print(f"Saved genre mapping for {len(genre_map)} files")
 
     # Determine number of worker processes
     num_workers = min(len(audio_files), multiprocessing.cpu_count())

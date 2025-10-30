@@ -20,11 +20,12 @@ from src.ui.modern_ui import launch_ui
 def build_group_weights(
     n_mfcc: int = fv.n_mfcc,
     n_mels: int = fv.n_mels,
-    include_genre: bool = True,
+    n_genres: int = fv.n_genres,
+    include_genre: bool = fv.include_genre,
 ) -> np.ndarray:
     """Create static group weights so each feature family contributes roughly equally."""
     if include_genre:
-        group_sizes = [2 * n_mfcc, 2 * n_mels, 2, 2, 10]
+        group_sizes = [2 * n_mfcc, 2 * n_mels, 2, 2, n_genres]
     else:
         group_sizes = [2 * n_mfcc, 2 * n_mels, 2, 2]
 
@@ -162,7 +163,7 @@ def run_kmeans_clustering(
     dynamic_k_max: int = 10,
     n_mfcc: int = fv.n_mfcc,
     n_mels: int = fv.n_mels,
-    include_genre: bool = True,
+    include_genre: bool = fv.include_genre,
 ):
     os.makedirs(results_dir, exist_ok=True)
 
@@ -218,7 +219,7 @@ def run_kmeans_clustering(
 
     output_dir = Path("output")
     output_dir.mkdir(exist_ok=True)
-    csv_path = output_dir / "audio_clustering_results.csv"
+    csv_path = output_dir / "audio_clustering_results_kmeans.csv"
     df.to_csv(csv_path, index=False)
     print(f"Results written to -> {csv_path}")
 
@@ -231,7 +232,7 @@ if __name__ == "__main__":
         results_dir="output/results",
         n_clusters=5,
         dynamic_cluster_selection=True,
-        include_genre=True,
+        include_genre=fv.include_genre,
     )
 
     launch_ui(DF, COORDS, LABELS, audio_dir="genres_original", clustering_method="K-means")

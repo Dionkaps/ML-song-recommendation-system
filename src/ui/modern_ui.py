@@ -17,12 +17,14 @@ except ImportError as exc:
 # Import pygame for audio playback
 try:
     import pygame
+    # Initialize pygame mixer
+    pygame.mixer.init()
 except ImportError as exc:
     raise RuntimeError(
         "Pygame isn't available. Install with 'pip install pygame'") from exc
-
-# Initialize pygame mixer
-pygame.mixer.init()
+except Exception as exc:
+    raise RuntimeError(
+        f"Failed to initialize pygame mixer: {exc}") from exc
 
 def launch_ui(df: pd.DataFrame, coords: np.ndarray, labels: np.ndarray, top_n: int = 5, audio_dir: str = "genres_original", clustering_method: str = "K-means"):
     root = tk.Tk()

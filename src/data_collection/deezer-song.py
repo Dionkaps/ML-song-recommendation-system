@@ -50,102 +50,77 @@ def sanitize_filename(filename):
     return re.sub(r'[<>:"/\\|?*]', '_', filename)
 
 
+def download_and_save_song(song, artist_name=""):
+    """Download and save a song preview, returning song metadata."""
+    title = song.get('title', 'Unknown')
+    artist = song.get('artist', {}).get('name', 'Unknown Artist')
+    preview_url = song.get('preview', None)
+
+    if not preview_url:
+        print(f"No preview available for {title} by {artist}")
+        return None
+
+    print(f"Found: {title} by {artist}")
+
+    # Ensure the output folder exists
+    if not os.path.exists(DEEZE_AUDIO_FOLDER):
+        os.makedirs(DEEZE_AUDIO_FOLDER)
+
+    # Create a valid filename from the song title and artist
+    raw_filename = f"{artist} - {title}"
+    valid_filename = sanitize_filename(raw_filename)
+    output_file = os.path.join(DEEZE_AUDIO_FOLDER, f"{valid_filename}.mp3")
+
+    print(f"Downloading preview to {output_file}...")
+    success = download_preview(preview_url, output_file)
+
+    if success:
+        print(f"Download complete! Saved to {output_file}")
+        return {"title": title, "artist": artist, "filename": valid_filename + ".mp3"}
+    else:
+        print("Download failed")
+        return None
+
+
 def process_song(song_line):
     """Process a single song line from the file"""
     try:
+        # Parse the song line to extract song name and artist
+        song_name = ""
+        artist_name = ""
+        
         if '–' in song_line:
             parts = song_line.strip().split('–')
+            if len(parts) == 2:
+                song_name = parts[0].strip()
+                artist_name = parts[1].strip()
         elif '-' in song_line:
             parts = song_line.strip().split('-')
-        else:
-            # If there's no separator, assume the entire line is a song name
-            print(
-                f"No artist specified for song: {song_line}. Searching by song name only.")
+            if len(parts) == 2:
+                song_name = parts[0].strip()
+                artist_name = parts[1].strip()
+        
+        # If no separator or invalid format, treat entire line as song name
+        if not song_name:
+            print(f"No artist specified for song: {song_line}. Searching by song name only.")
             song_name = song_line.strip()
             artist_name = ""
-            search_query = song_name
 
+        # Build search query
+        if artist_name:
+            search_query = f"{song_name} {artist_name}"
+            print(f"Searching for: {song_name} by {artist_name}")
+        else:
+            search_query = song_name
             print(f"Searching for: {song_name}")
 
-            song = search_song(search_query)
-            if not song:
-                return None
-
-            # Rest of the function continues here with the song object
-            title = song.get('title', 'Unknown')
-            artist = song.get('artist', {}).get('name', 'Unknown Artist')
-            preview_url = song.get('preview', None)
-
-            if not preview_url:
-                print(f"No preview available for {title} by {artist}")
-                return None
-
-            print(f"Found: {title} by {artist}")
-
-            # Ensure the output folder exists
-            if not os.path.exists(DEEZE_AUDIO_FOLDER):
-                os.makedirs(DEEZE_AUDIO_FOLDER)
-
-            # Create a valid filename from the song title and artist
-            raw_filename = f"{artist} - {title}"
-            valid_filename = sanitize_filename(raw_filename)
-            output_file = os.path.join(
-                DEEZE_AUDIO_FOLDER, f"{valid_filename}.mp3")
-
-            print(f"Downloading preview to {output_file}...")
-            success = download_preview(preview_url, output_file)
-
-            if success:
-                print(f"Download complete! Saved to {output_file}")
-                return {"title": title, "artist": artist, "filename": valid_filename + ".mp3"}
-            else:
-                print("Download failed")
-                return None
-
-        if len(parts) != 2:
-            print(f"Invalid format in line: {song_line}")
-            return None
-
-        # Original code for when there is artist information
-        song_name = parts[0].strip()
-        artist_name = parts[1].strip()
-        search_query = f"{song_name} {artist_name}"
-
-        print(f"Searching for: {song_name} by {artist_name}")
-
+        # Search and download
         song = search_song(search_query)
         if not song:
             return None
 
-        # Display song info
-        title = song.get('title', 'Unknown')
-        artist = song.get('artist', {}).get('name', 'Unknown Artist')
-        preview_url = song.get('preview', None)
+        return download_and_save_song(song, artist_name)
 
-        if not preview_url:
-            print(f"No preview available for {title} by {artist}")
-            return None
-
-        print(f"Found: {title} by {artist}")
-
-        # Ensure the output folder exists
-        if not os.path.exists(DEEZE_AUDIO_FOLDER):
-            os.makedirs(DEEZE_AUDIO_FOLDER)
-
-        # Create a valid filename from the song title and artist
-        raw_filename = f"{artist} - {title}"
-        valid_filename = sanitize_filename(raw_filename)
-        output_file = os.path.join(DEEZE_AUDIO_FOLDER, f"{valid_filename}.mp3")
-
-        print(f"Downloading preview to {output_file}...")
-        success = download_preview(preview_url, output_file)
-
-        if success:
-            print(f"Download complete! Saved to {output_file}")
-            return {"title": title, "artist": artist, "filename": valid_filename + ".mp3"}
-        else:
-            print("Download failed")
-            return None
     except Exception as e:
         print(f"Error processing song '{song_line}': {str(e)}")
         return None
@@ -176,7 +151,7 @@ def save_songs_to_csv(songs_data, filename):
 
 def main():
     start_time = time.time()
-    file_path = "names.txt"
+    file_path = "config/names.txt"
 
     if not os.path.exists(file_path):
         print(f"Error: File '{file_path}' not found.")

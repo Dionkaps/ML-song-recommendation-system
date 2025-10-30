@@ -26,7 +26,7 @@ def download_videos(video_urls, ydl_opts):
                 print(f"Failed to download {url}")
 
 
-def download_from_links(links_file='links.txt'):
+def download_from_links(links_file='config/links.txt'):
     os.makedirs('audio_files', exist_ok=True)
     try:
         with open(links_file, 'r', encoding='utf-8') as f:

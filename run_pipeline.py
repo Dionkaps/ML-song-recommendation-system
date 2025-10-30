@@ -25,17 +25,15 @@ def main():
     )
     parser.add_argument(
         "--clustering-method",
-        choices=["kmeans"],
+        choices=["kmeans", "hdbscan", "gmm"],
         default="kmeans",
-        help="The clustering method to use (only K-Means is currently supported).",
+        help="The clustering method to use (K-Means, HDBSCAN, or GMM).",
     )
     args = parser.parse_args()
 
     py = sys.executable 
 
     here = Path(__file__).resolve().parent
-    
-    subprocess.run(["python", "-c", "import os,sys; os.chdir(sys.argv[1])" , str(here)])
 
     if "download" not in args.skip:
         print("Using pre-existing genre data from genres_original folder.")
@@ -58,13 +56,15 @@ def main():
             run([py, "scripts/ploting.py", target])
 
     if "cluster" not in args.skip:
-        # Only K-Means is supported, but keep the branch explicit for clarity.
-        if args.clustering_method != "kmeans":
-            print(
-                f"\nUnsupported clustering method '{args.clustering_method}'. Falling back to K-Means."
-            )
-        print("\nUsing K-Means clustering method")
-        run([py, "src/clustering/kmeans.py"])
+        if args.clustering_method == "hdbscan":
+            print("\nUsing HDBSCAN clustering method")
+            run([py, "src/clustering/hdbscan.py"])
+        elif args.clustering_method == "gmm":
+            print("\nUsing GMM clustering method")
+            run([py, "src/clustering/gmm.py"])
+        else:
+            print("\nUsing K-Means clustering method")
+            run([py, "src/clustering/kmeans.py"])
 
 
 if __name__ == "__main__":
