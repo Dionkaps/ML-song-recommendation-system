@@ -22,18 +22,44 @@ def build_group_weights(
     n_mels: int = fv.n_mels,
     n_genres: int = fv.n_genres,
     include_genre: bool = fv.include_genre,
+    group_multipliers: Optional[List[float]] = None,
 ) -> np.ndarray:
-    """Create static group weights so each feature family contributes roughly equally."""
+    """
+    Create group weights with optional multipliers for adjusting feature importance.
+    
+    Args:
+        n_mfcc: Number of MFCC coefficients
+        n_mels: Number of mel bands
+        n_genres: Number of genre categories
+        include_genre: Whether to include genre as a feature
+        group_multipliers: List of multipliers for each feature group.
+                          If None, uses fv.feature_group_weights from config.
+                          Order: [MFCC, MelSpec, SpectralCentroid, ZCR, Genre]
+    
+    Returns:
+        Weight array matching the concatenated feature vector dimensions
+    """
     if include_genre:
         group_sizes = [2 * n_mfcc, 2 * n_mels, 2, 2, n_genres]
     else:
         group_sizes = [2 * n_mfcc, 2 * n_mels, 2, 2]
-
+    
+    # Use global config if no multipliers provided
+    if group_multipliers is None:
+        group_multipliers = fv.feature_group_weights[:len(group_sizes)]
+    
+    if len(group_multipliers) != len(group_sizes):
+        raise ValueError(
+            f"group_multipliers length ({len(group_multipliers)}) must match "
+            f"number of feature groups ({len(group_sizes)})"
+        )
+    
     total_dims = sum(group_sizes)
     weights = np.ones(total_dims, dtype=np.float32)
     idx = 0
-    for size in group_sizes:
-        weights[idx : idx + size] /= np.sqrt(size)
+    for i, size in enumerate(group_sizes):
+        # Apply multiplier and normalize by sqrt(size) to equalize within group
+        weights[idx : idx + size] = group_multipliers[i] / np.sqrt(size)
         idx += size
     return weights
 
