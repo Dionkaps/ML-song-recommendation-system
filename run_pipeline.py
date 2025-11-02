@@ -25,9 +25,9 @@ def main():
     )
     parser.add_argument(
         "--clustering-method",
-        choices=["kmeans", "hdbscan", "gmm"],
+        choices=["kmeans", "hdbscan", "gmm", "vade"],
         default="kmeans",
-        help="The clustering method to use (K-Means, HDBSCAN, or GMM).",
+        help="The clustering method to use (K-Means, HDBSCAN, GMM, or VaDE).",
     )
     args = parser.parse_args()
 
@@ -62,6 +62,9 @@ def main():
         elif args.clustering_method == "gmm":
             print("\nUsing GMM clustering method")
             run([py, "src/clustering/gmm.py"])
+        elif args.clustering_method == "vade":
+            print("\nUsing VaDE (Variational Deep Embedding) clustering method")
+            run([py, "src/clustering/vade.py"])
         else:
             print("\nUsing K-Means clustering method")
             run([py, "src/clustering/kmeans.py"])

@@ -31,12 +31,13 @@ def _select_components(
     max_iter: int,
     tol: float,
     init_params: str,
-) -> Tuple[int, GaussianMixture, List[float]]:
-    """Pick the component count that minimises BIC."""
+) -> Tuple[int, GaussianMixture, List[float], List[float]]:
+    """Pick the component count that minimises BIC (also tracks AIC)."""
     best_n = min_components
     best_model: Optional[GaussianMixture] = None
     best_bic = float('inf')
     bic_scores: List[float] = []
+    aic_scores: List[float] = []
 
     for n in range(min_components, max_components + 1):
         model = GaussianMixture(
@@ -49,7 +50,9 @@ def _select_components(
         )
         model.fit(data)
         bic = model.bic(data)
+        aic = model.aic(data)
         bic_scores.append(bic)
+        aic_scores.append(aic)
         if bic < best_bic:
             best_bic = bic
             best_n = n
@@ -58,7 +61,7 @@ def _select_components(
     if best_model is None:
         raise RuntimeError("Failed to fit any GaussianMixture models during selection.")
 
-    return best_n, best_model, bic_scores
+    return best_n, best_model, bic_scores, aic_scores
 
 
 def run_gmm_clustering(
@@ -100,9 +103,10 @@ def run_gmm_clustering(
     model: Optional[GaussianMixture] = None
     selected_components = n_components
     bic_scores: Optional[List[float]] = None
+    aic_scores: Optional[List[float]] = None
 
     if dynamic_component_selection:
-        selected_components, model, bic_scores = _select_components(
+        selected_components, model, bic_scores, aic_scores = _select_components(
             X_weighted,
             dynamic_min_components,
             dynamic_max_components,
@@ -113,7 +117,7 @@ def run_gmm_clustering(
         )
         print(
             f"BIC-driven selection picked {selected_components} components "
-            f"(min BIC={min(bic_scores):.2f})"
+            f"(min BIC={min(bic_scores):.2f}, min AIC={min(aic_scores):.2f})"
         )
 
     if model is None:
@@ -148,16 +152,17 @@ def run_gmm_clustering(
     output_dir = Path("output")
     output_dir.mkdir(exist_ok=True)
 
-    if bic_scores is not None:
+    if bic_scores is not None and aic_scores is not None:
         selection_df = pd.DataFrame(
             {
                 "Components": list(range(dynamic_min_components, dynamic_max_components + 1)),
                 "BIC": bic_scores,
+                "AIC": aic_scores,
             }
         )
-        selection_path = output_dir / "gmm_bic_scores.csv"
+        selection_path = output_dir / "gmm_selection_criteria.csv"
         selection_df.to_csv(selection_path, index=False)
-        print(f"Stored BIC diagnostics -> {selection_path}")
+        print(f"Stored BIC/AIC diagnostics -> {selection_path}")
 
     csv_path = output_dir / "audio_clustering_results_gmm.csv"
     df.to_csv(csv_path, index=False)

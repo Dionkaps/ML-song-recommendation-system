@@ -8,3 +8,4 @@ scipy>=1.7.0
 joblib>=1.0.0
 threadpoolctl>=3.0.0
 hdbscan>=0.8.0
+torch>=2.0.0

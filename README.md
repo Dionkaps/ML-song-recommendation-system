@@ -58,7 +58,12 @@ ML-song-recommendation-system/
 
 ### 1. Install Dependencies
 ```bash
-pip install numpy pandas scikit-learn librosa matplotlib pygame
+pip install -r requirements.txt
+```
+
+Or manually install:
+```bash
+pip install numpy pandas scikit-learn librosa matplotlib pygame hdbscan torch
 ```
 
 ### 2. Run the Complete Pipeline
@@ -72,9 +77,19 @@ This will:
 - Run the weighted K-Means (WKBSC) clustering algorithm
 - Launch the recommendation UI
 
-### 3. Run K-Means Directly
+### 3. Choose Clustering Method
 ```bash
+# K-Means (default)
 python run_pipeline.py --clustering-method kmeans
+
+# Gaussian Mixture Model
+python run_pipeline.py --clustering-method gmm
+
+# HDBSCAN (density-based)
+python run_pipeline.py --clustering-method hdbscan
+
+# VaDE (deep learning)
+python run_pipeline.py --clustering-method vade
 ```
 
 ### 4. Skip Specific Steps
@@ -84,15 +99,19 @@ python run_pipeline.py --skip extract plot
 
 ## Features
 
-- **Weighted K-Means**: K-Means enhanced with WKBSC feature weighting
+- **Multiple Clustering Algorithms**: K-Means, GMM, HDBSCAN, and VaDE (deep learning)
 - **Rich Audio Features**: MFCC, Mel-spectrograms, spectral descriptors
 - **Interactive UI**: Browse songs, get recommendations, play audio
 - **Visualization**: PCA-based 2D visualization of clusters
+- **Deep Learning**: VaDE combines VAE and GMM for joint feature learning and clustering
 
 ## Module Details
 
 ### Clustering Algorithms
-- **K-Means** (`src/clustering/kmeans.py`): K-Means clustering with PCA for visualization
+- **K-Means** (`src/clustering/kmeans.py`): Fast centroid-based clustering with hard assignments
+- **GMM** (`src/clustering/gmm.py`): Probabilistic clustering with Gaussian Mixture Models
+- **HDBSCAN** (`src/clustering/hdbscan.py`): Density-based clustering with noise detection
+- **VaDE** (`src/clustering/vade.py`): Deep learning approach combining VAE and GMM
 - **WKBSC** (`scripts/wkbsc.py`): Weighted K-Means with feature importance learning
 
 ### Feature Extraction
@@ -120,9 +139,19 @@ n_mels = 128     # Number of mel bands
 python src/features/extract_features.py
 ```
 
-### Run K-Means Directly
+### Run Clustering Algorithms Directly
 ```bash
+# K-Means
 python src/clustering/kmeans.py
+
+# Gaussian Mixture Model
+python src/clustering/gmm.py
+
+# HDBSCAN
+python src/clustering/hdbscan.py
+
+# VaDE (requires PyTorch)
+python src/clustering/vade.py
 ```
 
 ### Learn Feature Weights (WKBSC)
@@ -138,7 +167,10 @@ python scripts/ploting.py output/results
 ## Output Files
 
 - `output/results/`: Extracted features (.npy files)
-- `output/audio_clustering_results.csv`: K-Means clustering results
+- `output/audio_clustering_results_kmeans.csv`: K-Means clustering results
+- `output/audio_clustering_results_gmm.csv`: GMM clustering results
+- `output/audio_clustering_results_hdbscan.csv`: HDBSCAN clustering results
+- `output/audio_clustering_results_vade.csv`: VaDE clustering results
 - `output/results/wkbsc_feature_weights.npy`: Learned feature weights
 
 ## Requirements
@@ -150,7 +182,11 @@ python scripts/ploting.py output/results
 - librosa
 - matplotlib
 - pygame
+- hdbscan
+- PyTorch (for VaDE only)
 - tkinter (usually comes with Python)
+
+See `requirements.txt` for specific versions.
 
 ## License
 
