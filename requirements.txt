@@ -9,3 +9,5 @@ joblib>=1.0.0
 threadpoolctl>=3.0.0
 hdbscan>=0.8.0
 torch>=2.0.0
+pydub>=0.25.0
+requests>=2.25.0

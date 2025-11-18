@@ -215,6 +215,92 @@ def stability_ari_hdbscan(
     return float(np.mean(pairwise)) if pairwise else np.nan
 
 
+def stability_ari_vade(
+    X: np.ndarray,
+    n_components: int,
+    latent_dim: int = 10,
+    seeds: List[int] = SEEDS,
+    pretrain_epochs: int = 10,  # Reduced for speed during evaluation
+    train_epochs: int = 40,     # Reduced for speed during evaluation
+    batch_size: int = 128,
+    lr: float = 1e-3,
+) -> float:
+    """
+    Mean pairwise ARI across multiple VaDE runs with different random seeds.
+    Note: VaDE training can be slow, so we use reduced epochs for stability testing.
+    """
+    try:
+        import torch
+        from src.clustering.vade import VaDE, pretrain_autoencoder, init_gmm_prior, train_vade, TrainConfig
+        from torch.utils.data import DataLoader, TensorDataset
+    except ImportError:
+        print("Warning: PyTorch not available, cannot compute VaDE stability")
+        return np.nan
+    
+    if n_components < 2:
+        return np.nan
+    
+    runs = []
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
+    for s in seeds:
+        # Set seed for reproducibility
+        torch.manual_seed(s)
+        np.random.seed(s)
+        
+        # Prepare data
+        X_tensor = torch.from_numpy(X.astype(np.float32))
+        ds = TensorDataset(X_tensor)
+        loader = DataLoader(ds, batch_size=batch_size, shuffle=True, drop_last=False)
+        
+        # Create and train model
+        cfg = TrainConfig(
+            latent_dim=latent_dim,
+            n_components=n_components,
+            enc_hidden=[512, 256],
+            dec_hidden=[256, 512],
+            batch_size=batch_size,
+            lr=lr,
+            pretrain_epochs=pretrain_epochs,
+            train_epochs=train_epochs,
+            device=str(device),
+        )
+        
+        model = VaDE(
+            input_dim=X.shape[1],
+            latent_dim=cfg.latent_dim,
+            enc_hidden=cfg.enc_hidden,
+            dec_hidden=cfg.dec_hidden,
+            n_components=cfg.n_components,
+        ).to(device)
+        
+        # Train (suppressing output)
+        pretrain_autoencoder(model, loader, device, cfg)
+        init_gmm_prior(model, X, cfg)
+        train_vade(model, loader, cfg)
+        
+        # Get cluster assignments
+        model.eval()
+        with torch.no_grad():
+            all_gamma = []
+            for (x_batch,) in DataLoader(ds, batch_size=2048, shuffle=False):
+                x_batch = x_batch.to(device)
+                _, _, _, _, gamma = model(x_batch)
+                all_gamma.append(gamma.cpu().numpy())
+            GAMMA = np.vstack(all_gamma)
+        
+        labels = GAMMA.argmax(axis=1)
+        runs.append(labels)
+    
+    # Calculate pairwise ARI
+    pairwise = []
+    for i in range(len(runs)):
+        for j in range(i + 1, len(runs)):
+            pairwise.append(adjusted_rand_score(runs[i], runs[j]))
+    
+    return float(np.mean(pairwise)) if pairwise else np.nan
+
+
 # ---------------------------------------------------------------------
 # Metric calculation
 # ---------------------------------------------------------------------
@@ -323,7 +409,7 @@ def main():
     true_labels_full = np.array([genre_to_int[genre]
                                 for genre in genre_labels])
 
-    methods = ["kmeans", "hdbscan", "gmm"]
+    methods = ["kmeans", "hdbscan", "gmm", "vade"]
     all_results = []
 
     for method in methods:
@@ -390,6 +476,21 @@ def main():
                     cluster_selection_epsilon=0.0,
                     allow_single_cluster=False,
                 )
+            elif method == "vade":
+                # VaDE stability (can be slow, using reduced epochs)
+                c_est = results["N_Clusters"]
+                if isinstance(c_est, (int, np.integer)) and c_est >= 2:
+                    print("  Computing VaDE stability (this may take a few minutes)...")
+                    stab = stability_ari_vade(
+                        X_weighted,
+                        n_components=int(c_est),
+                        latent_dim=10,
+                        seeds=SEEDS,
+                        pretrain_epochs=10,  # Reduced for evaluation
+                        train_epochs=40,     # Reduced for evaluation
+                        batch_size=128,
+                        lr=1e-3,
+                    )
 
             results["Stability_ARI"] = stab
             all_results.append(results)
