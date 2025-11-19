@@ -2,6 +2,7 @@ audio_files/
 audio_files_1/
 audio_files_2/
 audio_files_all
+src/data_collection/audio_files/
 results/
 processed_results/
 __pycache__/
