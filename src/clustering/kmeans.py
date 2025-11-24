@@ -15,6 +15,7 @@ from sklearn.preprocessing import StandardScaler
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from config import feature_vars as fv
 from src.ui.modern_ui import launch_ui
+from src.utils import genre_mapper
 
 
 def build_group_weights(
@@ -69,29 +70,61 @@ def _load_genre_mapping(
     results_dir: str,
     include_genre: bool,
 ) -> Tuple[Dict[str, str], List[str]]:
-    """Load existing genre mapping or rebuild it from the audio directory."""
+    """
+    Load genre mapping from songs_data_with_genre.csv or fallback to directory structure.
+    
+    NOTE: When using songs_data_with_genre.csv, songs have MULTIPLE genres (multi-label).
+    For clustering purposes, we use the PRIMARY genre (first listed) to maintain
+    compatibility with single-label clustering algorithms.
+    """
     genre_map_path = os.path.join(results_dir, "genre_map.npy")
     genre_list_path = os.path.join(results_dir, "genre_list.npy")
 
-    if os.path.exists(genre_map_path) and include_genre:
+    # Try loading from songs_data_with_genre.csv first
+    csv_path = "songs_data_with_genre.csv"
+    if os.path.exists(csv_path) and include_genre:
+        print("Loading genre mapping from songs_data_with_genre.csv...")
+        multi_label_mapping = genre_mapper.load_genre_mapping(csv_path)
+        
+        # Convert to single-label using PRIMARY genre (first one listed)
+        # NOTE: This is intentional for clustering - we use the most prominent genre
+        genre_map = {}
+        for filename, genres_list in multi_label_mapping.items():
+            # Remove .mp3 extension if present to match feature file basenames
+            base = Path(filename).stem
+            primary_genre = genre_mapper.get_primary_genre(filename, multi_label_mapping)
+            genre_map[base] = primary_genre
+        
+        if genre_map:
+            np.save(genre_map_path, genre_map)
+            print(f"✓ Loaded genre mapping for {len(genre_map)} songs from CSV")
+    elif os.path.exists(genre_map_path) and include_genre:
+        # Load existing cached mapping
         genre_map: Dict[str, str] = np.load(genre_map_path, allow_pickle=True).item()
-        print(f"Loaded genre mapping for {len(genre_map)} files")
+        print(f"Loaded cached genre mapping for {len(genre_map)} files")
     else:
+        # Fallback: Try to load from genre-based directory structure
+        print("Attempting to load genre mapping from directory structure...")
         genre_map = {}
         genre_dirs = [d for d in glob.glob(os.path.join(audio_dir, "*")) if os.path.isdir(d)]
-        for genre_dir in genre_dirs:
-            genre = os.path.basename(genre_dir)
-            wav_files = glob.glob(os.path.join(genre_dir, "*.wav"))
-            for wav_path in wav_files:
-                base = Path(wav_path).stem
-                genre_map[base] = genre
-        if include_genre:
-            np.save(genre_map_path, genre_map)
-        print(f"Created genre mapping for {len(genre_map)} files")
+        
+        if genre_dirs:
+            for genre_dir in genre_dirs:
+                genre = os.path.basename(genre_dir)
+                wav_files = glob.glob(os.path.join(genre_dir, "*.wav"))
+                for wav_path in wav_files:
+                    base = Path(wav_path).stem
+                    genre_map[base] = genre
+            if include_genre:
+                np.save(genre_map_path, genre_map)
+            print(f"Created genre mapping for {len(genre_map)} files from directory structure")
+        else:
+            print(f"⚠️ Warning: No genre directories found in {audio_dir} and no CSV mapping available")
+            print("   Songs will be assigned 'unknown' genre")
 
-    unique_genres = sorted(set(genre_map.values()))
+    unique_genres = sorted(set(genre_map.values())) if genre_map else ['unknown']
     np.save(genre_list_path, unique_genres)
-    print(f"Found {len(unique_genres)} unique genres: {', '.join(unique_genres)}")
+    print(f"Found {len(unique_genres)} unique genres: {', '.join(unique_genres[:10])}{'...' if len(unique_genres) > 10 else ''}")
     return genre_map, unique_genres
 
 
@@ -181,7 +214,7 @@ def _select_optimal_k(
 
 
 def run_kmeans_clustering(
-    audio_dir: str = "genres_original",
+    audio_dir: str = "audio_files",
     results_dir: str = "output/results",
     n_clusters: int = 3,
     dynamic_cluster_selection: bool = False,
@@ -205,7 +238,12 @@ def run_kmeans_clustering(
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X_all)
 
-    weights = build_group_weights(n_mfcc=n_mfcc, n_mels=n_mels, include_genre=include_genre)
+    weights = build_group_weights(
+        n_mfcc=n_mfcc, 
+        n_mels=n_mels, 
+        n_genres=len(unique_genres),
+        include_genre=include_genre
+    )
     if X_scaled.shape[1] != len(weights):
         raise ValueError(
             f"Expected {len(weights)} dims after feature concat, got {X_scaled.shape[1]}"
@@ -216,6 +254,11 @@ def run_kmeans_clustering(
     centers: Optional[np.ndarray] = None
 
     if dynamic_cluster_selection:
+        # Adapt max clusters if we have more genres than the default max
+        if len(unique_genres) > dynamic_k_max:
+            print(f"Adjusting max clusters search range from {dynamic_k_max} to {len(unique_genres) + 2} (based on genre count)")
+            dynamic_k_max = len(unique_genres) + 2
+
         best_k, best_labels, best_centers = _select_optimal_k(
             X_weighted, n_clusters, dynamic_k_min, dynamic_k_max
         )
@@ -254,11 +297,11 @@ def run_kmeans_clustering(
 
 if __name__ == "__main__":
     DF, COORDS, LABELS = run_kmeans_clustering(
-        audio_dir="genres_original",
+        audio_dir="audio_files",
         results_dir="output/results",
         n_clusters=5,
         dynamic_cluster_selection=True,
         include_genre=fv.include_genre,
     )
 
-    launch_ui(DF, COORDS, LABELS, audio_dir="genres_original", clustering_method="K-means")
+    launch_ui(DF, COORDS, LABELS, audio_dir="audio_files", clustering_method="K-means")

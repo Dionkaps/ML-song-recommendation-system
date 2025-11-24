@@ -12,8 +12,8 @@ import matplotlib.patches as mpatches
 from datetime import datetime
 
 DEEZE_AUDIO_FOLDER = "audio_files"
-SONGS_DATA_CSV = "songs_data.csv"
-CHECKPOINT_FILE = "download_checkpoint.json"
+SONGS_DATA_CSV = "songs_data_with_genre.csv"
+CHECKPOINT_FILE = "download_checkpoint_with_genre.json"
 INPUT_CSV = "millionsong_dataset.csv"
 
 
@@ -99,6 +99,13 @@ def download_and_save_song(song, artist_name=""):
         return {"title": title, "artist": artist, "filename": valid_filename + ".mp3"}
     else:
         print("Download failed")
+        # Clean up partially downloaded file if it exists
+        if os.path.exists(output_file):
+            try:
+                os.remove(output_file)
+                print(f"Cleaned up failed download: {output_file}")
+            except Exception as e:
+                print(f"Warning: Could not remove failed file: {e}")
         return None
 
 
@@ -135,16 +142,23 @@ def process_song(song_data):
             if not song_name:
                 song_name = song_line.strip()
 
+        #  Add genre validation BEFORE search/download
+        genre = song_data.get('genre', '').strip() if isinstance(song_data, dict) else ''
+        
+        if not genre:
+            print(f"[{index}] Skipping '{song_name}' - no genre in dataset")
+            return None
+
         if not song_name:
             return None
 
         # Build search query
         if artist_name:
             search_query = f"{song_name} {artist_name}"
-            print(f"[{index}] Searching for: {song_name} by {artist_name}")
+            print(f"[{index}] Searching for: {song_name} by {artist_name} (genre: {genre[:30]}...)")
         else:
             search_query = song_name
-            print(f"[{index}] Searching for: {song_name}")
+            print(f"[{index}] Searching for: {song_name} (genre: {genre[:30]}...)")
 
         # Search and download
         song = search_song(search_query)
@@ -153,7 +167,8 @@ def process_song(song_data):
 
         result = download_and_save_song(song, artist_name)
         if result:
-            result['index'] = index
+            # Add genre to result (do NOT add 'index' - causes CSV save error)
+            result['genre'] = genre
         return result
 
     except Exception as e:
@@ -305,7 +320,7 @@ def save_songs_to_csv(songs_data, filename):
 
     try:
         with open(filename, 'w', newline='', encoding='utf-8') as csvfile:
-            fieldnames = ['title', 'artist', 'filename']
+            fieldnames = ['title', 'artist', 'filename', 'genre']
             writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
 
             writer.writeheader()

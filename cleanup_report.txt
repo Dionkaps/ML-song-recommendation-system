@@ -1,0 +1,68 @@
+﻿============================================================
+Feature Files Cleanup Script
+============================================================
+
+[Step 1] Loading audio file list...
+Found 7708 audio files
+Unique basenames: 7708
+
+[Step 2] Analyzing feature files in 'output/results'...
+
+Total feature file groups: 10867
+Total feature files: 50327
+
+Analysis:
+  Valid feature groups (have audio): 7708
+  Orphaned feature groups (no audio): 3159
+
+Sample orphaned feature bases:
+  1. '-M- - Je suis une cigarette' (5 files)
+  2. '2 Chainz - Good Drank' (5 files)
+  3. '21 Savage - Bank Account' (5 files)
+  4. '21 Savage - No Heart' (5 files)
+  5. '21 Savage - out for the night (part 2)' (5 files)
+  6. '21 Savage - Savage Mode' (5 files)
+  7. '2Pac - All Eyez On Me' (5 files)
+  8. '2Pac - California Love (Original Version)' (5 files)
+  9. '2Pac - Dear Mama' (5 files)
+  10. '2Pac - Ghetto Gospel' (5 files)
+
+[Step 3] Cleanup  (DRY RUN)...
+
+============================================================
+DRY RUN - No files will be deleted
+============================================================
+
+Orphaned feature groups to remove: 3159
+Total orphaned files to remove: 11787
+
+Files that WOULD be deleted:
+  - -M- - Je suis une cigarette_melspectrogram.npy
+  - -M- - Je suis une cigarette_mfcc.npy
+  - -M- - Je suis une cigarette_spectral_centroid.npy
+  - -M- - Je suis une cigarette_spectral_flatness.npy
+  - -M- - Je suis une cigarette_zero_crossing_rate.npy
+  - 2 Chainz - Good Drank_melspectrogram.npy
+  - 2 Chainz - Good Drank_mfcc.npy
+  - 2 Chainz - Good Drank_spectral_centroid.npy
+  - 2 Chainz - Good Drank_spectral_flatness.npy
+  - 2 Chainz - Good Drank_zero_crossing_rate.npy
+  - 21 Savage - Bank Account_melspectrogram.npy
+  - 21 Savage - Bank Account_mfcc.npy
+  - 21 Savage - Bank Account_spectral_centroid.npy
+  - 21 Savage - Bank Account_spectral_flatness.npy
+  - 21 Savage - Bank Account_zero_crossing_rate.npy
+  - 21 Savage - No Heart_melspectrogram.npy
+  - 21 Savage - No Heart_mfcc.npy
+  - 21 Savage - No Heart_spectral_centroid.npy
+  - 21 Savage - No Heart_spectral_flatness.npy
+  - 21 Savage - No Heart_zero_crossing_rate.npy
+  ... and 11767 more files
+
+To actually delete these files, run:
+  python cleanup_orphaned_features.py --confirm
+
+============================================================
+Cleanup script complete!
+============================================================
+

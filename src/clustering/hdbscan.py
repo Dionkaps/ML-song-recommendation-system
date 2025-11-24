@@ -61,7 +61,7 @@ def _compute_distances(
 
 
 def run_hdbscan_clustering(
-	audio_dir: str = "genres_original",
+	audio_dir: str = "audio_files",
 	results_dir: str = "output/results",
 	min_cluster_size: int = 10,
 	min_samples: Optional[int] = None,
@@ -85,7 +85,12 @@ def run_hdbscan_clustering(
 	scaler = StandardScaler()
 	X_scaled = scaler.fit_transform(X_all)
 
-	weights = build_group_weights(n_mfcc=n_mfcc, n_mels=n_mels, include_genre=include_genre)
+	weights = build_group_weights(
+		n_mfcc=n_mfcc, 
+		n_mels=n_mels, 
+		n_genres=len(unique_genres),
+		include_genre=include_genre
+	)
 	if X_scaled.shape[1] != len(weights):
 		raise ValueError(
 			f"Expected {len(weights)} dims after feature concat, got {X_scaled.shape[1]}"
@@ -135,10 +140,10 @@ def run_hdbscan_clustering(
 	return df, coords, labels
 if __name__ == "__main__":
 	DF, COORDS, LABELS = run_hdbscan_clustering(
-		audio_dir="genres_original",
+		audio_dir="audio_files",
 		results_dir="output/results",
 		min_cluster_size=10,
 		include_genre=fv.include_genre,
 	)
 
-	launch_ui(DF, COORDS, LABELS, audio_dir="genres_original", clustering_method="HDBSCAN")
+	launch_ui(DF, COORDS, LABELS, audio_dir="audio_files", clustering_method="HDBSCAN")

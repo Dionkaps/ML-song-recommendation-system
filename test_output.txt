@@ -1,0 +1,97 @@
+﻿
+============================================================
+PIPELINE FLOW VERIFICATION TEST
+============================================================
+
+============================================================
+TEST 1: CSV Structure
+============================================================
+Γ£ô Total CSV entries: 7793
+Γ£ô Columns: title, artist, filename, genre
+Γ£ô Entries with genres: 7793
+Γ£ô Entries without genres: 0
+
+Sample entries:
+  1. The Box Tops - Soul Deep.mp3
+     Genre: blue-eyed soul, pop rock, blues-rock, be...
+  2. CLP - Superconfidential.mp3
+     Genre: breakcore, miami bass, new rave, grime, ...
+  3. Sue Thompson - James (Hold the Ladder Steady).mp3
+     Genre: pop rock, soft rock, blues-rock, doo-wop...
+
+============================================================
+TEST 2: Audio Files vs CSV
+============================================================
+Γ£ô Audio files in directory: 7708
+Γ£ô Files listed in CSV: 7717
+
+Γ£ô Files in both: 7708
+ΓÜá∩╕Å  CSV entries WITHOUT audio file: 9
+   First 3: ["John Holt - I'll Take a Melody.mp3", 'The Exciters - Reaching For The Best.mp3', 'Clarence _Gatemouth_ Brown - Up Jumped the Devil.mp3']
+
+============================================================
+TEST 3: Feature Files vs Audio Files
+============================================================
+Γ£ô Feature files (mfcc): 9865
+
+Γ£ô Audio files with features: 7708
+ΓÜá∩╕Å  Feature files WITHOUT audio: 2157
+   First 3: ['rock.00070', 'disco.00081', 'Beth Hart, Joe Bonamassa - Sitting On Top Of The World']
+
+============================================================
+TEST 4: Genre Mapping for Clustering
+============================================================
+Γ£ô Loaded genre mapping for 7717 songs
+  - Total unique genres: 880
+  - Average genres per song: 4.90
+
+Γ£ô Loaded multi-label mapping: 7717 songs
+
+Sample keys from genre mapping:
+  1. Key: 'The Box Tops - Soul Deep.mp3'
+     Genres: ['blue-eyed soul', 'pop rock', 'blues-rock', 'beach music', 'soft rock']
+  2. Key: 'CLP - Superconfidential.mp3'
+     Genres: ['breakcore', 'miami bass', 'new rave', 'grime', 'breakbeat']
+  3. Key: 'Sue Thompson - James (Hold the Ladder Steady).mp3'
+     Genres: ['pop rock', 'soft rock', 'blues-rock', 'doo-wop', 'chanson']
+
+------------------------------------------------------------
+Simulating kmeans.py genre map creation:
+------------------------------------------------------------
+Γ£ô Created genre_map with 7717 entries
+
+Sample genre_map entries:
+  1. Base: 'The Box Tops - Soul Deep'
+     Primary Genre: blue-eyed soul
+  2. Base: 'CLP - Superconfidential'
+     Primary Genre: breakcore
+  3. Base: 'Sue Thompson - James (Hold the Ladder Steady)'
+     Primary Genre: pop rock
+
+------------------------------------------------------------
+Testing feature file to genre mapping:
+------------------------------------------------------------
+Tested 100 feature files:
+  Γ£ô Mapped to genre: 80
+  Γ£ù NOT mapped: 20
+
+Sample unmapped feature files:
+    - '-M- - Je suis une cigarette'
+    - '2 Chainz - Good Drank'
+    - '21 Savage - Bank Account'
+
+============================================================
+SUMMARY
+============================================================
+
+Γ£ô Pipeline verification complete!
+
+Key findings:
+1. CSV contains songs with genres (as required)
+2. Audio files should match CSV entries
+3. Feature files are extracted from audio files
+4. Genre mapping connects CSV to clustering
+
+If all tests show Γ£ô, the pipeline is working correctly!
+============================================================
+

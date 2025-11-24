@@ -4,7 +4,7 @@ hop_length = 512
 n_mels = 128
 
 include_genre = True
-n_genres = 10 # Works for GTANZAN dataset with 10 genres
+n_genres = 10 # Default fallback. Actual number is calculated dynamically from data.
 
 # ---------------------------------------------------------------------
 # Feature Weight Configuration (GLOBAL - applies to all clustering methods)

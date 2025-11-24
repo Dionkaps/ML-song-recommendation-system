@@ -65,7 +65,7 @@ def _select_components(
 
 
 def run_gmm_clustering(
-    audio_dir: str = "genres_original",
+    audio_dir: str = "audio_files",
     results_dir: str = "output/results",
     n_components: int = 5,
     covariance_type: str = "full",
@@ -93,7 +93,12 @@ def run_gmm_clustering(
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X_all)
 
-    weights = build_group_weights(n_mfcc=n_mfcc, n_mels=n_mels, include_genre=include_genre)
+    weights = build_group_weights(
+        n_mfcc=n_mfcc, 
+        n_mels=n_mels, 
+        n_genres=len(unique_genres),
+        include_genre=include_genre
+    )
     if X_scaled.shape[1] != len(weights):
         raise ValueError(
             f"Expected {len(weights)} dims after feature concat, got {X_scaled.shape[1]}"
@@ -106,6 +111,11 @@ def run_gmm_clustering(
     aic_scores: Optional[List[float]] = None
 
     if dynamic_component_selection:
+        # Adapt max components if we have more genres than the default max
+        if len(unique_genres) > dynamic_max_components:
+            print(f"Adjusting max components search range from {dynamic_max_components} to {len(unique_genres) + 2} (based on genre count)")
+            dynamic_max_components = len(unique_genres) + 2
+
         selected_components, model, bic_scores, aic_scores = _select_components(
             X_weighted,
             dynamic_min_components,
@@ -178,11 +188,11 @@ def run_gmm_clustering(
 
 if __name__ == "__main__":
     DF, COORDS, LABELS = run_gmm_clustering(
-        audio_dir="genres_original",
+        audio_dir="audio_files",
         results_dir="output/results",
         n_components=5,
         dynamic_component_selection=True,
         include_genre=fv.include_genre,
     )
 
-    launch_ui(DF, COORDS, LABELS, audio_dir="genres_original", clustering_method="GMM")
+    launch_ui(DF, COORDS, LABELS, audio_dir="audio_files", clustering_method="GMM")

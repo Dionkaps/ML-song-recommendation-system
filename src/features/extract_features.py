@@ -61,16 +61,13 @@ def extract_zero_crossing_rate(y, hop_length=fv.hop_length):
 def process_file(audio_path, results_dir, n_mfcc, n_fft, hop_length, n_mels):
     """
     Load an audio file, extract features, and save them to .npy files.
-    Also extracts and saves the genre information.
+    Works with flat directory structure (audio_files).
     """
     filename = os.path.basename(audio_path)
     base_filename = os.path.splitext(filename)[0]
     
-    # Extract genre from the parent folder name
-    genre = os.path.basename(os.path.dirname(audio_path))
-    
     try:
-        print(f"Loading {filename} (genre: {genre})...")
+        print(f"Loading {filename}...")
         
         # Suppress stderr output during audio loading to hide mpg123 warnings
         with suppress_stderr():
@@ -93,53 +90,54 @@ def process_file(audio_path, results_dir, n_mfcc, n_fft, hop_length, n_mels):
                 f"{base_filename}_spectral_flatness.npy"), spec_flatness)
         np.save(os.path.join(results_dir,
                 f"{base_filename}_zero_crossing_rate.npy"), zcr)
-        
-        # Save genre information
-        np.save(os.path.join(results_dir, f"{base_filename}_genre.npy"), np.array([genre]))
 
-        print(f"Finished processing {filename}")
-        return base_filename, genre
+        print(f"✓ Finished processing {filename}")
+        return base_filename
     except Exception as e:
-        print(f"Error processing {filename}: {e}")
+        print(f"✗ Error processing {filename}: {e}")
         return None
 
 
-def run_feature_extraction(audio_dir='genres_original', results_dir='output/results'):
+def run_feature_extraction(audio_dir='audio_files', results_dir='output/results'):
     """
-    Finds all .wav files in the genre folders under audio_dir and processes them in parallel.
+    Finds all audio files (.wav, .mp3, .flac, .m4a) in audio_dir and processes them in parallel.
+    Works with flat directory structure - genre info comes from songs_data_with_genre.csv.
     """
     os.makedirs(results_dir, exist_ok=True)
     
-    # Get all genre directories
-    genre_dirs = [d for d in glob.glob(os.path.join(audio_dir, "*")) if os.path.isdir(d)]
-    if not genre_dirs:
-        print(f"No genre directories found in {audio_dir}.")
+    if not os.path.exists(audio_dir):
+        print(f"Error: Audio directory '{audio_dir}' not found.")
         return
-        
-    # Collect all .wav files from all genre directories
-    audio_files = []
-    genre_map = {}  # To store mapping of filenames to genres
     
-    for genre_dir in genre_dirs:
-        genre_name = os.path.basename(genre_dir)
-        wav_files = glob.glob(os.path.join(genre_dir, "*.wav"))
-        
-        for wav_file in wav_files:
-            audio_files.append(wav_file)
-            base_filename = os.path.splitext(os.path.basename(wav_file))[0]
-            genre_map[base_filename] = genre_name
-            
-        print(f"Found {len(wav_files)} .wav files in {genre_name} genre.")
+    # Collect all audio files (support multiple formats)
+    audio_extensions = ['*.wav', '*.mp3', '*.flac', '*.m4a']
+    audio_files = []
+    
+    for ext in audio_extensions:
+        found = glob.glob(os.path.join(audio_dir, ext))
+        audio_files.extend(found)
     
     if not audio_files:
-        print(f"No .wav files found in genre directories under {audio_dir}.")
+        print(f"No audio files found in {audio_dir}.")
+        print(f"Searched for extensions: {', '.join(audio_extensions)}")
         return
+    
+    print(f"\n{'='*60}")
+    print(f"Feature Extraction Started")
+    print(f"{'='*60}")
+    print(f"Audio directory: {audio_dir}")
+    print(f"Results directory: {results_dir}")
+    print(f"Found {len(audio_files)} audio files")
+    print(f"{'='*60}\n")
 
     # Determine number of worker processes
     num_workers = min(len(audio_files), multiprocessing.cpu_count())
-    print(f"Starting parallel processing with {num_workers} workers...")
+    print(f"Starting parallel processing with {num_workers} workers...\n")
 
     # Use ProcessPoolExecutor for CPU-bound tasks
+    processed_count = 0
+    failed_count = 0
+    
     with ProcessPoolExecutor(max_workers=num_workers) as executor:
         futures = [
             executor.submit(
@@ -154,23 +152,25 @@ def run_feature_extraction(audio_dir='genres_original', results_dir='output/resu
             for audio_path in audio_files
         ]
         
-        # Wait for all to complete and collect genre information
+        # Wait for all to complete
         for future in futures:
             result = future.result()
             if result:
-                base_filename, genre = result
-                genre_map[base_filename] = genre
+                processed_count += 1
+            else:
+                failed_count += 1
     
-    # Save the genre mapping to a file
-    np.save(os.path.join(results_dir, "genre_map.npy"), genre_map)
-    print(f"Genre mapping saved to {os.path.join(results_dir, 'genre_map.npy')}")
+    print(f"\n{'='*60}")
+    print(f"Feature Extraction Complete")
+    print(f"{'='*60}")
+    print(f"Successfully processed: {processed_count} files")
+    print(f"Failed: {failed_count} files")
+    print(f"Results saved to: {results_dir}")
+    print(f"{'='*60}\n")
     
-    # Also save as CSV for easy inspection
-    with open(os.path.join(results_dir, "genre_map.csv"), "w") as f:
-        f.write("filename,genre\n")
-        for filename, genre in genre_map.items():
-            f.write(f"{filename},{genre}\n")
-    print(f"Genre mapping also saved to CSV: {os.path.join(results_dir, 'genre_map.csv')}")
+    # Note about genre mapping
+    print("NOTE: Genre information should be loaded from songs_data_with_genre.csv")
+    print("      Use genre_mapper.py utility to map features to genres.")
 
 
 def main():
