@@ -478,7 +478,7 @@ def run_vade_clustering(
 # -----------------------------------------------------------------------------
 if __name__ == "__main__":
     DF, COORDS, LABELS = run_vade_clustering(
-        audio_dir="genres_original",
+        audio_dir="audio_files",
         results_dir="output/features",
         n_components=10,
         latent_dim=10,
@@ -487,4 +487,4 @@ if __name__ == "__main__":
         include_genre=fv.include_genre,
     )
 
-    launch_ui(DF, COORDS, LABELS, audio_dir="genres_original", clustering_method="VaDE")
+    launch_ui(DF, COORDS, LABELS, audio_dir="audio_files", clustering_method="VaDE")

@@ -300,7 +300,7 @@ if __name__ == "__main__":
         audio_dir="audio_files",
         results_dir="output/features",
         n_clusters=5,
-        dynamic_cluster_selection=True,
+        dynamic_cluster_selection=False,
         include_genre=fv.include_genre,
     )
 

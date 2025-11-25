@@ -11,3 +11,5 @@ __pycache__/
 genres_original/
 output/features/
 .vscode/
+docs/
+

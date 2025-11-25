@@ -195,36 +195,52 @@ def launch_ui(df: pd.DataFrame, coords: np.ndarray, labels: np.ndarray, top_n: i
         song_row = df[df["Song"] == song_name]
         audio_file = None
         
-        # Method 1: Try to get genre from DataFrame
-        if not song_row.empty and "Genre" in df.columns:
-            genre = song_row["Genre"].values[0]
-            # The file path should include the genre folder
-            potential_file = os.path.join(audio_folder, genre, f"{song_name}.wav")
-            if os.path.exists(potential_file):
-                audio_file = potential_file
+        # Potential filenames to check
+        candidates = [song_name]
+        if not song_name.lower().endswith(('.wav', '.mp3')):
+            candidates.append(f"{song_name}.wav")
+            candidates.append(f"{song_name}.mp3")
+
+        # Method 1: Check directly in audio_folder (flat structure)
+        for candidate in candidates:
+            potential_path = os.path.join(audio_folder, candidate)
+            if os.path.exists(potential_path):
+                audio_file = potential_path
+                break
         
-        # Method 2: Try to extract genre from song name (assuming format 'genre.xxxxxx')
+        # Method 2: Check in genre subfolder (if genre is known)
+        if audio_file is None and not song_row.empty and "Genre" in df.columns:
+            genre = song_row["Genre"].values[0]
+            for candidate in candidates:
+                potential_path = os.path.join(audio_folder, genre, candidate)
+                if os.path.exists(potential_path):
+                    audio_file = potential_path
+                    break
+        
+        # Method 3: Try to extract genre from song name (assuming format 'genre.xxxxxx')
         if audio_file is None:
             parts = song_name.split('.')
             if len(parts) > 0:
                 genre = parts[0]
-                potential_file = os.path.join(audio_folder, genre, f"{song_name}.wav")
-                if os.path.exists(potential_file):
-                    audio_file = potential_file
-        
-        # Method 3: Search in all genre folders
-        if audio_file is None:
-            for genre_folder in os.listdir(audio_folder):
-                genre_dir = os.path.join(audio_folder, genre_folder)
-                if os.path.isdir(genre_dir):
-                    potential_path = os.path.join(genre_dir, f"{song_name}.wav")
+                for candidate in candidates:
+                    potential_path = os.path.join(audio_folder, genre, candidate)
                     if os.path.exists(potential_path):
                         audio_file = potential_path
                         break
         
+        # Method 4: Search recursively (fallback)
+        if audio_file is None:
+            for root_dir, _, files in os.walk(audio_folder):
+                for candidate in candidates:
+                    if candidate in files:
+                        audio_file = os.path.join(root_dir, candidate)
+                        break
+                if audio_file:
+                    break
+        
         # If we still don't have a file, error out
         if audio_file is None:
-            messagebox.showerror("Error", f"Could not find audio file for {song_name}")
+            messagebox.showerror("Error", f"Could not find audio file for {song_name}\nSearched in {audio_folder}")
             return
 
         # Update the current song information

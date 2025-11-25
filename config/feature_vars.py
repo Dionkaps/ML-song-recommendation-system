@@ -27,4 +27,4 @@ n_genres = 10 # Default fallback. Actual number is calculated dynamically from d
 # NOTE: Only the first 4 values are used when include_genre=False (default)
 #       All 5 values are used when include_genre=True
 
-feature_group_weights = [1.0, 1.0, 1.0, 1.0, 10.0]  # [MFCC, MelSpec, SpectralCentroid, ZCR, Genre]
+feature_group_weights = [1.0, 1.0, 1.0, 1.0, 1.0]  # [MFCC, MelSpec, SpectralCentroid, ZCR, Genre]
