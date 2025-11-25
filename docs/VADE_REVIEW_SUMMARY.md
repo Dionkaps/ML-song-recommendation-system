@@ -353,8 +353,8 @@ No further changes needed for core functionality.
 
 ### Documentation Files
 - `VADE_IMPLEMENTATION.md` - Detailed implementation guide
-- `test_vade.py` - Test suite
-- `README.md` - Updated project README
+- `../tests/test_vade.py` - Test suite
+- `../README.md` - Updated project README
 
 ### Key Files
 - `src/clustering/vade.py` - Main implementation

@@ -4,6 +4,12 @@
 import csv
 import os
 import sys
+from pathlib import Path
+
+# Ensure we are running from project root
+project_root = Path(__file__).resolve().parent.parent.parent
+os.chdir(project_root)
+sys.path.insert(0, str(project_root))
 
 # Songs that are showing warnings
 problem_songs = [
@@ -22,7 +28,7 @@ print("Checking Problem Songs")
 print("="*60)
 
 # Load CSV
-with open('songs_data_with_genre.csv', 'r', encoding='utf-8') as f:
+with open(os.path.join('data', 'songs_data_with_genre.csv'), 'r', encoding='utf-8') as f:
     rows = list(csv.DictReader(f))
 
 print(f"\nTotal songs in CSV: {len(rows)}")

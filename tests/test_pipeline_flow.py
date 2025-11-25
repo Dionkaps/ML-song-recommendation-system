@@ -15,13 +15,17 @@ import csv
 from pathlib import Path
 import numpy as np
 
+# Add project root to path
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
+
 def test_csv_structure():
     """Test 1: Verify CSV structure"""
     print("="*60)
     print("TEST 1: CSV Structure")
     print("="*60)
     
-    csv_path = "songs_data_with_genre.csv"
+    csv_path = os.path.join("data", "songs_data_with_genre.csv")
     if not os.path.exists(csv_path):
         print("❌ CSV file not found!")
         return None

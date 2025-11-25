@@ -8,49 +8,30 @@ A machine learning project that analyzes audio files to create a content-based m
 ML-song-recommendation-system/
 │
 ├── src/                          # Main source code
-│   ├── clustering/               # Clustering algorithms
-│   │   ├── kmeans.py            # K-Means clustering implementation
-│   │
+│   ├── clustering/               # Clustering algorithms (K-Means, GMM, VaDE, HDBSCAN)
 │   ├── features/                 # Feature extraction modules
-│   │   └── extract_features.py  # Audio feature extraction
-│   │
 │   ├── ui/                       # User interface modules
-│   │   └── modern_ui.py         # Main UI for recommendations
-│   │
 │   └── data_collection/          # Data collection scripts
-│       ├── playlist_audio_download.py  # Download audio from YouTube
-│       └── deezer-song.py       # Deezer song data collection
 │
-├── scripts/                      # Utility and analysis scripts
-│   ├── ploting.py               # Visualization scripts
-│   └── wkbsc.py                 # Weighted K-means clustering
+├── scripts/                      # Scripts
+│   ├── analysis/                 # Analysis scripts
+│   └── utilities/                # Maintenance and utility scripts
+│
+├── tests/                        # Test suite
+│
+├── docs/                         # Documentation and reports
+│   ├── reports/                  # Generated reports
+│   └── ...                       # Implementation guides and references
 │
 ├── config/                       # Configuration files
-│   ├── feature_vars.py          # Feature extraction parameters
-│   ├── names.txt                # Song/playlist names
-│   └── links.txt                # YouTube links
+│
+├── archived/                     # Deprecated or unused files
 │
 ├── output/                       # Output files and results
-│   ├── results/                 # Main results directory
-│   └── spectral/                # Spectral clustering results
 │
-├── genres_original/              # Original audio files by genre
-│   ├── blues/
-│   ├── classical/
-│   ├── country/
-│   ├── disco/
-│   ├── hiphop/
-│   ├── jazz/
-│   ├── metal/
-│   ├── pop/
-│   ├── reggae/
-│   └── rock/
-│
-├── docs/                         # Documentation
-│   └── README.md                # Detailed project documentation
-│
-├── run_pipeline.py              # Main pipeline execution script
-└── LICENSE
+├── run_pipeline.py               # Main pipeline entry point
+├── run_extraction.py             # Feature extraction entry point
+└── requirements.txt              # Project dependencies
 
 ```
 

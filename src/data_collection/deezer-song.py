@@ -10,11 +10,17 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from datetime import datetime
+from pathlib import Path
+
+# Ensure we are running from project root
+project_root = Path(__file__).resolve().parent.parent.parent
+os.chdir(project_root)
+sys.path.insert(0, str(project_root))
 
 DEEZE_AUDIO_FOLDER = "audio_files"
-SONGS_DATA_CSV = "songs_data_with_genre.csv"
+SONGS_DATA_CSV = os.path.join("data", "songs_data_with_genre.csv")
 CHECKPOINT_FILE = "download_checkpoint_with_genre.json"
-INPUT_CSV = "millionsong_dataset.csv"
+INPUT_CSV = os.path.join("data", "millionsong_dataset.csv")
 
 
 def search_song(song_name):
@@ -335,9 +341,8 @@ def save_songs_to_csv(songs_data, filename):
 def main():
     start_time = time.time()
     
-    # Get script directory for relative paths
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    csv_path = os.path.join(script_dir, INPUT_CSV)
+    # Use path relative to project root (since we chdir'd there)
+    csv_path = INPUT_CSV
     
     # Check if Million Song CSV exists, fallback to names.txt
     if os.path.exists(csv_path):

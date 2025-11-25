@@ -4,9 +4,15 @@ Cleanup orphaned MP3 files that don't have entries in songs_data_with_genre.csv
 import os
 import csv
 import sys
+from pathlib import Path
+
+# Ensure we are running from project root
+project_root = Path(__file__).resolve().parent.parent.parent
+os.chdir(project_root)
+sys.path.insert(0, str(project_root))
 
 AUDIO_FOLDER = "audio_files"
-CSV_FILE = "songs_data_with_genre.csv"
+CSV_FILE = os.path.join("data", "songs_data_with_genre.csv")
 
 def cleanup_orphaned_files(auto_confirm=False):
     """Remove MP3 files that aren't in the CSV"""

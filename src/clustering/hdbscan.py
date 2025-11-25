@@ -62,7 +62,7 @@ def _compute_distances(
 
 def run_hdbscan_clustering(
 	audio_dir: str = "audio_files",
-	results_dir: str = "output/results",
+	results_dir: str = "output/features",
 	min_cluster_size: int = 10,
 	min_samples: Optional[int] = None,
 	cluster_selection_epsilon: float = 0.0,
@@ -125,8 +125,8 @@ def run_hdbscan_clustering(
 		}
 	)
 
-	output_dir = Path("output")
-	output_dir.mkdir(exist_ok=True)
+	output_dir = Path("output/clustering_results")
+	output_dir.mkdir(parents=True, exist_ok=True)
 	csv_path = output_dir / "audio_clustering_results_hdbscan.csv"
 	df.to_csv(csv_path, index=False)
 	print(f"Results written to -> {csv_path}")
@@ -141,7 +141,7 @@ def run_hdbscan_clustering(
 if __name__ == "__main__":
 	DF, COORDS, LABELS = run_hdbscan_clustering(
 		audio_dir="audio_files",
-		results_dir="output/results",
+		results_dir="output/features",
 		min_cluster_size=10,
 		include_genre=fv.include_genre,
 	)

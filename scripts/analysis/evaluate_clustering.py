@@ -13,6 +13,11 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+# Ensure we are running from project root
+project_root = Path(__file__).resolve().parent.parent.parent
+os.chdir(project_root)
+sys.path.insert(0, str(project_root))
+
 import numpy as np
 import pandas as pd
 from sklearn.metrics import (
@@ -56,7 +61,7 @@ HDBSCAN_RANDOM_SEED = 0          # HDBSCAN: RNG seed for subsampling
 
 def load_clustering_results(method: str) -> pd.DataFrame:
     """Load clustering results CSV for a given method."""
-    csv_path = f"output/audio_clustering_results_{method}.csv"
+    csv_path = f"output/clustering_results/audio_clustering_results_{method}.csv"
     if not os.path.exists(csv_path):
         raise FileNotFoundError(f"Results file not found: {csv_path}")
     return pd.read_csv(csv_path)
@@ -64,7 +69,7 @@ def load_clustering_results(method: str) -> pd.DataFrame:
 
 def prepare_feature_data(
     audio_dir: str = "genres_original",
-    results_dir: str = "output/results",
+    results_dir: str = "output/features",
     include_genre: bool = fv.include_genre,
 ):
     """Prepare standardized and weighted feature data."""

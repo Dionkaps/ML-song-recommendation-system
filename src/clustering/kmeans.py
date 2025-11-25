@@ -81,9 +81,9 @@ def _load_genre_mapping(
     genre_list_path = os.path.join(results_dir, "genre_list.npy")
 
     # Try loading from songs_data_with_genre.csv first
-    csv_path = "songs_data_with_genre.csv"
+    csv_path = os.path.join("data", "songs_data_with_genre.csv")
     if os.path.exists(csv_path) and include_genre:
-        print("Loading genre mapping from songs_data_with_genre.csv...")
+        print(f"Loading genre mapping from {csv_path}...")
         multi_label_mapping = genre_mapper.load_genre_mapping(csv_path)
         
         # Convert to single-label using PRIMARY genre (first one listed)
@@ -286,8 +286,8 @@ def run_kmeans_clustering(
         }
     )
 
-    output_dir = Path("output")
-    output_dir.mkdir(exist_ok=True)
+    output_dir = Path("output/clustering_results")
+    output_dir.mkdir(parents=True, exist_ok=True)
     csv_path = output_dir / "audio_clustering_results_kmeans.csv"
     df.to_csv(csv_path, index=False)
     print(f"Results written to -> {csv_path}")
@@ -298,7 +298,7 @@ def run_kmeans_clustering(
 if __name__ == "__main__":
     DF, COORDS, LABELS = run_kmeans_clustering(
         audio_dir="audio_files",
-        results_dir="output/results",
+        results_dir="output/features",
         n_clusters=5,
         dynamic_cluster_selection=True,
         include_genre=fv.include_genre,

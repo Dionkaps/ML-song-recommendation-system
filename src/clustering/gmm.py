@@ -159,8 +159,10 @@ def run_gmm_clustering(
         }
     )
 
-    output_dir = Path("output")
-    output_dir.mkdir(exist_ok=True)
+    output_dir = Path("output/clustering_results")
+    metrics_dir = Path("output/metrics")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    metrics_dir.mkdir(parents=True, exist_ok=True)
 
     if bic_scores is not None and aic_scores is not None:
         selection_df = pd.DataFrame(
@@ -170,7 +172,7 @@ def run_gmm_clustering(
                 "AIC": aic_scores,
             }
         )
-        selection_path = output_dir / "gmm_selection_criteria.csv"
+        selection_path = metrics_dir / "gmm_selection_criteria.csv"
         selection_df.to_csv(selection_path, index=False)
         print(f"Stored BIC/AIC diagnostics -> {selection_path}")
 
@@ -189,7 +191,7 @@ def run_gmm_clustering(
 if __name__ == "__main__":
     DF, COORDS, LABELS = run_gmm_clustering(
         audio_dir="audio_files",
-        results_dir="output/results",
+        results_dir="output/features",
         n_components=5,
         dynamic_component_selection=True,
         include_genre=fv.include_genre,

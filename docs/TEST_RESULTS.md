@@ -155,12 +155,12 @@ python run_pipeline.py --skip extract plot --clustering-method vade
 
 ### For Development
 1. All test files are available:
-   - `test_clustering.py` - Comprehensive test suite
-   - `test_vade.py` - VaDE-specific tests
+   - `tests/test_clustering.py` - Comprehensive test suite
+   - `tests/test_vade.py` - VaDE-specific tests
 
 2. Run quick tests with:
    ```bash
-   python test_clustering.py
+   python tests/test_clustering.py
    ```
 
 ## Conclusion

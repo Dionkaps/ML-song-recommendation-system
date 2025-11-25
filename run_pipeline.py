@@ -41,12 +41,26 @@ def main():
         print("="*60)
         
         # Check for Million Song Dataset CSV
-        million_song_csv = here / "src" / "data_collection" / "millionsong_dataset.csv"
+        million_song_csv = here / "data" / "millionsong_dataset.csv"
         if not million_song_csv.exists():
-            print("❌ ERROR: Million Song Dataset CSV not found!")
-            print(f"   Expected: {million_song_csv}")
-            print("   Please ensure the dataset CSV exists before downloading.")
-            sys.exit(1)
+            # Check for tar.gz
+            tar_path = here / "data" / "millionsongsubset.tar.gz"
+            if tar_path.exists():
+                print(f"✓ Found Million Song Dataset archive: {tar_path}")
+                print("   Extracting dataset and generating CSV...")
+                run([py, "src/data_collection/extract_millionsong_dataset.py"])
+                
+                # Re-check
+                if not million_song_csv.exists():
+                     print("❌ ERROR: Extraction failed to create CSV!")
+                     sys.exit(1)
+            else:
+                print("❌ ERROR: Million Song Dataset CSV not found!")
+                print(f"   Expected: {million_song_csv}")
+                print("   OR")
+                print(f"   Archive: {tar_path}")
+                print("   Please ensure the dataset exists before downloading.")
+                sys.exit(1)
         
         print(f"✓ Found Million Song Dataset: {million_song_csv}")
         
@@ -65,7 +79,7 @@ def main():
         print("Validating download results...")
         print("="*60)
         
-        csv_path = here / "songs_data_with_genre.csv"
+        csv_path = here / "data" / "songs_data_with_genre.csv"
         audio_dir = here / "audio_files"
         
         if not csv_path.exists():
@@ -98,7 +112,8 @@ def main():
                     print(f"   MP3 files: {mp3_count}")
                     print(f"   CSV entries: {csv_count}")
                     print("\n🧹 Running automatic cleanup...")
-                    run([py, "cleanup_orphaned_files.py", "--auto-confirm"])
+                    cleanup_script = Path("scripts/utilities/cleanup_orphaned_files.py")
+                    run([py, str(cleanup_script), "--auto-confirm"])
                 else:
                     print(f"✓ Perfect match! All {mp3_count} files have CSV entries")
         
@@ -113,15 +128,8 @@ def main():
         print("      python run_extraction.py")
 
     if "plot" not in args.skip:
-        plot_targets = ["output/results"]
-        processed_dir = here / "output" / "processed_results"
-        if processed_dir.exists():
-            plot_targets.append("output/processed_results")
-        else:
-            print(f"Skipping plotting for {processed_dir} (directory not found).")
-
-        for target in plot_targets:
-            run([py, "scripts/ploting.py", target])
+        print("\nGenerating plots from extracted features...")
+        run([py, "scripts/visualization/ploting.py", "--features_dir", "output/features", "--plots_dir", "output/plots"])
 
     if "cluster" not in args.skip:
         if args.clustering_method == "hdbscan":

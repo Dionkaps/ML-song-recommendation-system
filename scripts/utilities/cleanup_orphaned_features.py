@@ -3,7 +3,7 @@
 """
 Feature Files Cleanup Script
 
-This script removes orphaned feature files from output/results that don't have
+This script removes orphaned feature files from output/features that don't have
 corresponding audio files in audio_files directory.
 
 This ensures KMeans clustering only processes songs that:
@@ -15,6 +15,11 @@ import os
 import sys
 from pathlib import Path
 from collections import defaultdict
+
+# Ensure we are running from project root
+project_root = Path(__file__).resolve().parent.parent.parent
+os.chdir(project_root)
+sys.path.insert(0, str(project_root))
 
 def get_audio_basenames(audio_dir='audio_files'):
     """Get set of basenames from audio files (without extensions)"""
@@ -30,7 +35,7 @@ def get_audio_basenames(audio_dir='audio_files'):
     
     return basenames
 
-def analyze_feature_files(results_dir='output/results', audio_basenames=None):
+def analyze_feature_files(results_dir='output/features', audio_basenames=None):
     """Analyze feature files and identify orphaned ones"""
     if not os.path.exists(results_dir):
         print(f"Error: Results directory '{results_dir}' not found!")
@@ -152,7 +157,7 @@ def main():
                        help='Actually delete files (default is dry-run)')
     parser.add_argument('--audio-dir', default='audio_files',
                        help='Path to audio files directory')
-    parser.add_argument('--results-dir', default='output/results',
+    parser.add_argument('--results-dir', default='output/clustering_results',
                        help='Path to feature results directory')
     
     args = parser.parse_args()

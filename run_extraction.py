@@ -3,7 +3,7 @@ import glob
 import argparse
 import time
 from pathlib import Path
-from src.extract_embeddings import (
+from src.features.extract_embeddings import (
     extract_openl3, extract_crepe, extract_madmom, extract_mert,
     get_openl3_model, get_mert_model, get_madmom_processor
 )

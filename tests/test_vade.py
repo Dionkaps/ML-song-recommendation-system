@@ -6,6 +6,10 @@ Run this after installing requirements to ensure everything is set up correctly.
 import sys
 from pathlib import Path
 
+# Add project root to path
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
+
 def test_imports():
     """Test that all required modules can be imported."""
     print("Testing imports...")
@@ -151,7 +155,7 @@ def test_pipeline_integration():
     print("\nTesting pipeline integration...")
     
     try:
-        pipeline_path = Path("run_pipeline.py")
+        pipeline_path = PROJECT_ROOT / "run_pipeline.py"
         if not pipeline_path.exists():
             print(f"  ✗ run_pipeline.py not found")
             return False

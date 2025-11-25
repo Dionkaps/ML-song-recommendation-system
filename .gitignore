@@ -9,4 +9,5 @@ results/
 processed_results/
 __pycache__/
 genres_original/
+output/features/
 .vscode/

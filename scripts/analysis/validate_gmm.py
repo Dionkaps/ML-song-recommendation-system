@@ -2,6 +2,13 @@
 import pandas as pd
 import numpy as np
 from pathlib import Path
+import os
+import sys
+
+# Ensure we are running from project root
+project_root = Path(__file__).resolve().parent.parent.parent
+os.chdir(project_root)
+sys.path.insert(0, str(project_root))
 
 def validate_gmm():
     """Check GMM implementation for common issues."""
@@ -10,8 +17,8 @@ def validate_gmm():
     print("=" * 70)
     
     # Load results
-    gmm_path = Path("output/audio_clustering_results_gmm.csv")
-    bic_path = Path("output/gmm_bic_scores.csv")
+    gmm_path = Path("output/clustering_results/audio_clustering_results_gmm.csv")
+    bic_path = Path("output/metrics/gmm_selection_criteria.csv")
     
     if not gmm_path.exists():
         print("❌ GMM results file not found. Run: python src/clustering/gmm.py")

@@ -1,10 +1,17 @@
 """Compare BIC and AIC scores for GMM component selection."""
 import pandas as pd
 from pathlib import Path
+import os
+import sys
+
+# Ensure we are running from project root
+project_root = Path(__file__).resolve().parent.parent.parent
+os.chdir(project_root)
+sys.path.insert(0, str(project_root))
 
 def compare_bic_aic():
     """Display and compare BIC vs AIC model selection criteria."""
-    csv_path = Path("output/gmm_selection_criteria.csv")
+    csv_path = Path("output/metrics/gmm_selection_criteria.csv")
     
     if not csv_path.exists():
         print("❌ File not found. Run GMM clustering first:")

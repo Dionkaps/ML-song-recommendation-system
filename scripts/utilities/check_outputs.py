@@ -1,6 +1,13 @@
 import os
 import numpy as np
 import glob
+from pathlib import Path
+import sys
+
+# Ensure we are running from project root
+project_root = Path(__file__).resolve().parent.parent.parent
+os.chdir(project_root)
+sys.path.insert(0, str(project_root))
 
 def check_outputs(base_dir="output/embeddings"):
     models = ['openl3', 'crepe', 'madmom', 'mert']

@@ -8,6 +8,13 @@ import madmom
 import torch
 from transformers import Wav2Vec2FeatureExtractor, AutoModel
 import tensorflow as tf
+import sys
+from pathlib import Path
+
+# Ensure we are running from project root
+project_root = Path(__file__).resolve().parent.parent.parent
+os.chdir(project_root)
+sys.path.insert(0, str(project_root))
 
 # Suppress TensorFlow logs
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3' 

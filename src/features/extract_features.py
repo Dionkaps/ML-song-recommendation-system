@@ -98,7 +98,7 @@ def process_file(audio_path, results_dir, n_mfcc, n_fft, hop_length, n_mels):
         return None
 
 
-def run_feature_extraction(audio_dir='audio_files', results_dir='output/results'):
+def run_feature_extraction(audio_dir='audio_files', results_dir='output/features'):
     """
     Finds all audio files (.wav, .mp3, .flac, .m4a) in audio_dir and processes them in parallel.
     Works with flat directory structure - genre info comes from songs_data_with_genre.csv.
@@ -169,7 +169,7 @@ def run_feature_extraction(audio_dir='audio_files', results_dir='output/results'
     print(f"{'='*60}\n")
     
     # Note about genre mapping
-    print("NOTE: Genre information should be loaded from songs_data_with_genre.csv")
+    print("NOTE: Genre information should be loaded from data/songs_data_with_genre.csv")
     print("      Use genre_mapper.py utility to map features to genres.")
 
 

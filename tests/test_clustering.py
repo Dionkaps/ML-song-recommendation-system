@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 
 # Add project root to path
-PROJECT_ROOT = Path(__file__).resolve().parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 import numpy as np
@@ -117,7 +117,7 @@ def check_data_availability():
     print(f"  Found {len([f for f in genre_folders if f.is_dir()])} genre folders")
     
     # Check for extracted features
-    results_dir = PROJECT_ROOT / "output" / "results"
+    results_dir = PROJECT_ROOT / "output" / "clustering_results"
     if not results_dir.exists():
         print(f"✗ Results directory not found: {results_dir}")
         print(f"  Run feature extraction first: python src/features/extract_features.py")
@@ -147,14 +147,14 @@ def test_kmeans():
         print("Running KMeans clustering...")
         kmeans.run_kmeans_clustering(
             audio_dir="genres_original",
-            results_dir="output/results",
+            results_dir="output/clustering_results",
             n_clusters=10,
             dynamic_cluster_selection=False,
         )
         print("✓ KMeans clustering completed successfully!")
         
         # Check if output file was created
-        output_file = PROJECT_ROOT / "output" / "audio_clustering_results_kmeans.csv"
+        output_file = PROJECT_ROOT / "output" / "clustering_results" / "audio_clustering_results_kmeans.csv"
         if output_file.exists():
             print(f"✓ Output file created: {output_file}")
             import pandas as pd
@@ -183,7 +183,7 @@ def test_gmm():
         print("Running GMM clustering...")
         gmm.run_gmm_clustering(
             audio_dir="genres_original",
-            results_dir="output/results",
+            results_dir="output/clustering_results",
             n_components=10,
             covariance_type="full",
             dynamic_component_selection=False,
@@ -191,7 +191,7 @@ def test_gmm():
         print("✓ GMM clustering completed successfully!")
         
         # Check if output file was created
-        output_file = PROJECT_ROOT / "output" / "audio_clustering_results_gmm.csv"
+        output_file = PROJECT_ROOT / "output" / "clustering_results" / "audio_clustering_results_gmm.csv"
         if output_file.exists():
             print(f"✓ Output file created: {output_file}")
             import pandas as pd
@@ -220,13 +220,13 @@ def test_hdbscan():
         print("Running HDBSCAN clustering...")
         hdbscan_module.run_hdbscan_clustering(
             audio_dir="genres_original",
-            results_dir="output/results",
+            results_dir="output/clustering_results",
             min_cluster_size=10,
         )
         print("✓ HDBSCAN clustering completed successfully!")
         
         # Check if output file was created
-        output_file = PROJECT_ROOT / "output" / "audio_clustering_results_hdbscan.csv"
+        output_file = PROJECT_ROOT / "output" / "clustering_results" / "audio_clustering_results_hdbscan.csv"
         if output_file.exists():
             print(f"✓ Output file created: {output_file}")
             import pandas as pd
@@ -260,7 +260,7 @@ def test_vade():
         print("Running VaDE clustering (this may take a few minutes)...")
         vade.run_vade_clustering(
             audio_dir="genres_original",
-            results_dir="output/results",
+            results_dir="output/clustering_results",
             n_components=10,
             latent_dim=10,
             pretrain_epochs=20,
@@ -269,7 +269,7 @@ def test_vade():
         print("✓ VaDE clustering completed successfully!")
         
         # Check if output file was created
-        output_file = PROJECT_ROOT / "output" / "audio_clustering_results_vade.csv"
+        output_file = PROJECT_ROOT / "output" / "clustering_results" / "audio_clustering_results_vade.csv"
         if output_file.exists():
             print(f"✓ Output file created: {output_file}")
             import pandas as pd

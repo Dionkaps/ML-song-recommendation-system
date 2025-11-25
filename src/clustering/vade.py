@@ -308,7 +308,7 @@ def train_vade(model: VaDE, loader: DataLoader, cfg: TrainConfig):
 
 def run_vade_clustering(
     audio_dir: str = "genres_original",
-    results_dir: str = "output/results",
+    results_dir: str = "output/features",
     n_components: int = 5,
     latent_dim: int = 10,
     enc_hidden: Optional[List[int]] = None,
@@ -464,8 +464,8 @@ def run_vade_clustering(
         }
     )
 
-    output_dir = Path("output")
-    output_dir.mkdir(exist_ok=True)
+    output_dir = Path("output/clustering_results")
+    output_dir.mkdir(parents=True, exist_ok=True)
     csv_path = output_dir / "audio_clustering_results_vade.csv"
     df.to_csv(csv_path, index=False)
     print(f"Results written to -> {csv_path}")
@@ -479,7 +479,7 @@ def run_vade_clustering(
 if __name__ == "__main__":
     DF, COORDS, LABELS = run_vade_clustering(
         audio_dir="genres_original",
-        results_dir="output/results",
+        results_dir="output/features",
         n_components=10,
         latent_dim=10,
         pretrain_epochs=20,

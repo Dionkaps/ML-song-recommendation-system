@@ -3,6 +3,12 @@ import tarfile
 import h5py
 import csv
 from pathlib import Path
+import sys
+
+# Ensure we are running from project root
+project_root = Path(__file__).resolve().parent.parent.parent
+os.chdir(project_root)
+sys.path.insert(0, str(project_root))
 
 def extract_tar_gz(tar_path, extract_to):
     """Extract tar.gz file"""
@@ -55,10 +61,10 @@ def find_h5_files(directory):
 
 def main():
     # Paths
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    tar_path = os.path.join(script_dir, 'millionsongsubset.tar.gz')
-    extract_dir = os.path.join(script_dir, 'millionsongsubset_extracted')
-    output_csv = os.path.join(script_dir, 'millionsong_dataset.csv')
+    data_dir = os.path.join(project_root, 'data')
+    tar_path = os.path.join(data_dir, 'millionsongsubset.tar.gz')
+    extract_dir = os.path.join(data_dir, 'millionsongsubset_extracted')
+    output_csv = os.path.join(data_dir, 'millionsong_dataset.csv')
     
     # Extract tar.gz if not already extracted
     if not os.path.exists(extract_dir):

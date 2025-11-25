@@ -14,7 +14,7 @@ python run_pipeline.py --clustering-method vade
 python src/clustering/vade.py
 
 # Test implementation
-python test_vade.py
+python tests/test_vade.py
 ```
 
 ## Key Parameters
