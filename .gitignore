@@ -7,9 +7,11 @@ millionsongsubset_extracted/
 millionsongsubset.tar.gz
 results/
 processed_results/
+output/embeddings/
 __pycache__/
 genres_original/
 output/features/
+
 .vscode/
 docs/
 

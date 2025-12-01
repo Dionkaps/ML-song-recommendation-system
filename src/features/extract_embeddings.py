@@ -167,7 +167,7 @@ def extract_madmom(audio_path, output_dir, processor=None, verbose=False):
         return False
 
 
-def extract_mert(audio_path, output_dir, model=None, feature_extractor=None, device=None, verbose=False):
+def extract_mert(audio_path, output_dir, model=None, feature_extractor=None, device=None, verbose=False, use_mean_pooling=True):
     """
     Extracts MERT embeddings.
     
@@ -178,6 +178,9 @@ def extract_mert(audio_path, output_dir, model=None, feature_extractor=None, dev
         feature_extractor: Pre-loaded feature extractor (optional)
         device: torch device (optional)
         verbose: Print verbose output
+        use_mean_pooling: If True, average across time dimension to get a single 
+                         768-dim vector per song (~3KB). If False, keep full 
+                         temporal sequence (~6MB per song). Default True.
     """
     try:
         if model is None or feature_extractor is None:
@@ -200,16 +203,22 @@ def extract_mert(audio_path, output_dir, model=None, feature_extractor=None, dev
             outputs = model(input_values)
             # Get last hidden state: (batch, time, hidden_size)
             last_hidden_state = outputs.last_hidden_state
-        
-        # Convert to numpy
-        embeddings = last_hidden_state.squeeze(0).cpu().numpy()
+            
+            if use_mean_pooling:
+                # Mean pooling across time dimension: (batch, time, 768) -> (batch, 768)
+                # This creates a single compact representation for the entire song
+                embeddings = last_hidden_state.mean(dim=1).squeeze(0).cpu().numpy()
+            else:
+                # Keep full temporal sequence: (time, 768)
+                embeddings = last_hidden_state.squeeze(0).cpu().numpy()
         
         basename = os.path.splitext(os.path.basename(audio_path))[0]
         output_path = os.path.join(output_dir, f"{basename}.npy")
         np.save(output_path, embeddings)
         
         if verbose:
-            print(f"Saved MERT embeddings for {basename} (shape: {embeddings.shape})")
+            pooling_info = "mean-pooled" if use_mean_pooling else "full sequence"
+            print(f"Saved MERT embeddings for {basename} (shape: {embeddings.shape}, {pooling_info})")
         return True
     except Exception as e:
         print(f"Error extracting MERT for {audio_path}: {e}")

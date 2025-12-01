@@ -20,6 +20,8 @@ from src.clustering.kmeans import (  # noqa: E402
     _collect_feature_vectors,
     _load_genre_mapping,
     build_group_weights,
+    compute_cluster_range,
+    prepare_features,
 )
 
 
@@ -31,6 +33,7 @@ def _select_components(
     max_iter: int,
     tol: float,
     init_params: str,
+    reg_covar: float = 1e-6,
 ) -> Tuple[int, GaussianMixture, List[float], List[float]]:
     """Pick the component count that minimises BIC (also tracks AIC)."""
     best_n = min_components
@@ -40,23 +43,39 @@ def _select_components(
     aic_scores: List[float] = []
 
     for n in range(min_components, max_components + 1):
-        model = GaussianMixture(
-            n_components=n,
-            covariance_type=covariance_type,
-            max_iter=max_iter,
-            tol=tol,
-            init_params=init_params,
-            random_state=42,
-        )
-        model.fit(data)
-        bic = model.bic(data)
-        aic = model.aic(data)
-        bic_scores.append(bic)
-        aic_scores.append(aic)
-        if bic < best_bic:
-            best_bic = bic
-            best_n = n
-            best_model = model
+        try:
+            model = GaussianMixture(
+                n_components=n,
+                covariance_type=covariance_type,
+                max_iter=max_iter,
+                tol=tol,
+                init_params=init_params,
+                reg_covar=reg_covar,
+                random_state=42,
+            )
+            model.fit(data)
+            bic = model.bic(data)
+            aic = model.aic(data)
+            bic_scores.append(bic)
+            aic_scores.append(aic)
+            
+            # Only accept model if it converged
+            if not model.converged_:
+                print(f"  GMM with {n} components did not converge, skipping...")
+                bic_scores.append(float('inf'))
+                aic_scores.append(float('inf'))
+                continue
+                
+            if bic < best_bic:
+                best_bic = bic
+                best_n = n
+                best_model = model
+        except ValueError as e:
+            # Handle ill-conditioned covariance matrices
+            print(f"  GMM with {n} components failed: {str(e)[:60]}...")
+            bic_scores.append(float('inf'))
+            aic_scores.append(float('inf'))
+            continue
 
     if best_model is None:
         raise RuntimeError("Failed to fit any GaussianMixture models during selection.")
@@ -72,9 +91,10 @@ def run_gmm_clustering(
     max_iter: int = 200,
     tol: float = 1e-3,
     init_params: str = "kmeans",
-    dynamic_component_selection: bool = False,
-    dynamic_min_components: int = 2,
-    dynamic_max_components: int = 12,
+    reg_covar: float = 1e-5,
+    dynamic_component_selection: bool = True,
+    dynamic_min_components: Optional[int] = None,
+    dynamic_max_components: Optional[int] = None,
     n_mfcc: int = fv.n_mfcc,
     n_mels: int = fv.n_mels,
     include_genre: bool = fv.include_genre,
@@ -90,20 +110,15 @@ def run_gmm_clustering(
         raise RuntimeError("No songs with complete feature files were found.")
 
     X_all = np.vstack(feature_vectors)
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X_all)
-
-    weights = build_group_weights(
-        n_mfcc=n_mfcc, 
-        n_mels=n_mels, 
+    
+    # Use the unified feature preparation (PCA per group or weighted)
+    X_prepared = prepare_features(
+        X_all,
+        n_mfcc=n_mfcc,
+        n_mels=n_mels,
         n_genres=len(unique_genres),
-        include_genre=include_genre
+        include_genre=include_genre,
     )
-    if X_scaled.shape[1] != len(weights):
-        raise ValueError(
-            f"Expected {len(weights)} dims after feature concat, got {X_scaled.shape[1]}"
-        )
-    X_weighted = X_scaled * weights
 
     model: Optional[GaussianMixture] = None
     selected_components = n_components
@@ -111,19 +126,30 @@ def run_gmm_clustering(
     aic_scores: Optional[List[float]] = None
 
     if dynamic_component_selection:
-        # Adapt max components if we have more genres than the default max
-        if len(unique_genres) > dynamic_max_components:
-            print(f"Adjusting max components search range from {dynamic_max_components} to {len(unique_genres) + 2} (based on genre count)")
-            dynamic_max_components = len(unique_genres) + 2
+        n_samples = X_prepared.shape[0]
+        
+        # Compute data-driven component range if not explicitly provided
+        auto_min, auto_max = compute_cluster_range(n_samples, len(unique_genres))
+        min_comp = dynamic_min_components if dynamic_min_components is not None else auto_min
+        max_comp = dynamic_max_components if dynamic_max_components is not None else auto_max
+        
+        # Additional cap for GMM stability with full covariance
+        if covariance_type == 'full':
+            max_stable = X_prepared.shape[0] // 20
+            max_comp = min(max_comp, max_stable)
+        
+        print(f"Dynamic component selection: searching n in [{min_comp}, {max_comp}]")
+        print(f"  (Based on {n_samples} samples and {len(unique_genres)} genres)")
 
         selected_components, model, bic_scores, aic_scores = _select_components(
-            X_weighted,
-            dynamic_min_components,
-            dynamic_max_components,
+            X_prepared,
+            min_comp,
+            max_comp,
             covariance_type,
             max_iter,
             tol,
             init_params,
+            reg_covar,
         )
         print(
             f"BIC-driven selection picked {selected_components} components "
@@ -137,15 +163,16 @@ def run_gmm_clustering(
             max_iter=max_iter,
             tol=tol,
             init_params=init_params,
+            reg_covar=reg_covar,
             random_state=42,
         )
-        model.fit(X_weighted)
+        model.fit(X_prepared)
 
-    labels = model.predict(X_weighted)
-    probabilities = model.predict_proba(X_weighted).max(axis=1)
-    log_probs = model.score_samples(X_weighted)
+    labels = model.predict(X_prepared)
+    probabilities = model.predict_proba(X_prepared).max(axis=1)
+    log_probs = model.score_samples(X_prepared)
 
-    coords = PCA(n_components=2, random_state=42).fit_transform(X_weighted)
+    coords = PCA(n_components=2, random_state=42).fit_transform(X_prepared)
 
     df = pd.DataFrame(
         {
@@ -165,9 +192,10 @@ def run_gmm_clustering(
     metrics_dir.mkdir(parents=True, exist_ok=True)
 
     if bic_scores is not None and aic_scores is not None:
+        min_comp = dynamic_min_components if dynamic_min_components is not None else 2
         selection_df = pd.DataFrame(
             {
-                "Components": list(range(dynamic_min_components, dynamic_max_components + 1)),
+                "Components": list(range(min_comp, min_comp + len(bic_scores))),
                 "BIC": bic_scores,
                 "AIC": aic_scores,
             }

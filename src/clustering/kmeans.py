@@ -35,15 +35,15 @@ def build_group_weights(
         include_genre: Whether to include genre as a feature
         group_multipliers: List of multipliers for each feature group.
                           If None, uses fv.feature_group_weights from config.
-                          Order: [MFCC, MelSpec, SpectralCentroid, ZCR, Genre]
+                          Order: [MFCC, MelSpec, SpectralCentroid, SpectralFlatness, ZCR, Genre]
     
     Returns:
         Weight array matching the concatenated feature vector dimensions
     """
     if include_genre:
-        group_sizes = [2 * n_mfcc, 2 * n_mels, 2, 2, n_genres]
+        group_sizes = [2 * n_mfcc, 2 * n_mels, 2, 2, 2, n_genres]
     else:
-        group_sizes = [2 * n_mfcc, 2 * n_mels, 2, 2]
+        group_sizes = [2 * n_mfcc, 2 * n_mels, 2, 2, 2]
     
     # Use global config if no multipliers provided
     if group_multipliers is None:
@@ -63,6 +63,153 @@ def build_group_weights(
         weights[idx : idx + size] = group_multipliers[i] / np.sqrt(size)
         idx += size
     return weights
+
+
+def equalize_features_pca(
+    X_all: np.ndarray,
+    n_mfcc: int = fv.n_mfcc,
+    n_mels: int = fv.n_mels,
+    n_genres: int = fv.n_genres,
+    include_genre: bool = fv.include_genre,
+    pca_components: int = fv.pca_components_per_group,
+) -> np.ndarray:
+    """
+    Equalize feature contributions by applying PCA to each feature group separately.
+    
+    Each group is standardized and transformed to EXACTLY the same number of dimensions,
+    ensuring truly equal contribution regardless of original dimensionality.
+    
+    For groups with fewer dimensions than pca_components, we pad with zeros after
+    standardization to ensure all groups contribute equally.
+    
+    Additionally, each group is normalized to have unit Frobenius norm (per sample),
+    ensuring equal total variance contribution.
+    
+    Args:
+        X_all: Raw feature matrix [n_samples, n_features]
+        n_mfcc: Number of MFCC coefficients
+        n_mels: Number of mel bands
+        n_genres: Number of genre categories
+        include_genre: Whether genre features are included
+        pca_components: Number of PCA components per group (target dimensions)
+    
+    Returns:
+        Equalized feature matrix [n_samples, n_groups * pca_components]
+    """
+    # Define group boundaries
+    if include_genre:
+        group_sizes = [2 * n_mfcc, 2 * n_mels, 2, 2, 2, n_genres]
+        group_names = ["MFCC", "MelSpec", "SpectralCentroid", "SpectralFlatness", "ZCR", "Genre"]
+    else:
+        group_sizes = [2 * n_mfcc, 2 * n_mels, 2, 2, 2]
+        group_names = ["MFCC", "MelSpec", "SpectralCentroid", "SpectralFlatness", "ZCR"]
+    
+    # Validate input dimensions match expected
+    expected_dims = sum(group_sizes)
+    if X_all.shape[1] != expected_dims:
+        raise ValueError(
+            f"Feature dimension mismatch: got {X_all.shape[1]} features, "
+            f"expected {expected_dims} (group_sizes={group_sizes}). "
+            f"Check n_mfcc={n_mfcc}, n_mels={n_mels}, n_genres={n_genres}, include_genre={include_genre}"
+        )
+    
+    # Compute group start indices
+    group_starts = [0]
+    for size in group_sizes[:-1]:
+        group_starts.append(group_starts[-1] + size)
+    
+    equalized_groups = []
+    n_samples = X_all.shape[0]
+    
+    for i, (start, size, name) in enumerate(zip(group_starts, group_sizes, group_names)):
+        end = start + size
+        X_group = X_all[:, start:end]
+        
+        # Standardize the group
+        scaler = StandardScaler()
+        X_group_scaled = scaler.fit_transform(X_group)
+        
+        # Target: exactly pca_components dimensions for ALL groups
+        if size > pca_components:
+            # Reduce via PCA
+            n_components = min(pca_components, n_samples - 1)  # PCA constraint
+            pca = PCA(n_components=n_components, random_state=42)
+            X_group_transformed = pca.fit_transform(X_group_scaled)
+            variance_retained = sum(pca.explained_variance_ratio_) * 100
+            
+            # Pad if PCA gave fewer components than target (due to sample constraint)
+            if X_group_transformed.shape[1] < pca_components:
+                padding = np.zeros((n_samples, pca_components - X_group_transformed.shape[1]))
+                X_group_transformed = np.hstack([X_group_transformed, padding])
+            
+            status = "\u2713" if variance_retained >= 80 else "\u26a0"
+            print(f"  {status} {name}: {size} dims -> {pca_components} dims (PCA, {variance_retained:.1f}% variance)")
+        elif size < pca_components:
+            # Pad with zeros to reach target dimensions
+            padding = np.zeros((n_samples, pca_components - size))
+            X_group_transformed = np.hstack([X_group_scaled, padding])
+            print(f"  {name}: {size} dims -> {pca_components} dims (padded with {pca_components - size} zeros)")
+        else:
+            # Exact match
+            X_group_transformed = X_group_scaled
+            print(f"  {name}: {size} dims -> {pca_components} dims (exact match)")
+        
+        # Normalize each group to have equal contribution (unit Frobenius norm per sample on average)
+        # This ensures groups with different variance scales contribute equally
+        group_norm = np.sqrt(np.mean(np.sum(X_group_transformed ** 2, axis=1)))
+        if group_norm > 1e-10:
+            X_group_transformed = X_group_transformed / group_norm
+        
+        equalized_groups.append(X_group_transformed)
+    
+    # Concatenate all equalized groups
+    X_equalized = np.hstack(equalized_groups)
+    print(f"  Total: {X_all.shape[1]} dims -> {X_equalized.shape[1]} dims ({len(group_names)} groups x {pca_components} dims)")
+    
+    return X_equalized.astype(np.float32)
+
+
+def prepare_features(
+    X_all: np.ndarray,
+    n_mfcc: int = fv.n_mfcc,
+    n_mels: int = fv.n_mels,
+    n_genres: int = fv.n_genres,
+    include_genre: bool = fv.include_genre,
+    equalization_method: Optional[str] = None,
+    pca_components: Optional[int] = None,
+) -> np.ndarray:
+    """
+    Prepare features for clustering using the configured equalization method.
+    
+    Args:
+        X_all: Raw feature matrix
+        n_mfcc, n_mels, n_genres: Feature dimensions
+        include_genre: Whether genre is included
+        equalization_method: Override config method ("pca_per_group" or "weighted")
+        pca_components: Override config PCA components per group
+    
+    Returns:
+        Prepared feature matrix ready for clustering
+    """
+    method = equalization_method or getattr(fv, 'feature_equalization_method', 'weighted')
+    pca_comp = pca_components or getattr(fv, 'pca_components_per_group', 5)
+    
+    print(f"Feature equalization method: {method}")
+    
+    if method == "pca_per_group":
+        return equalize_features_pca(
+            X_all, n_mfcc, n_mels, n_genres, include_genre, pca_comp
+        )
+    else:
+        # Legacy weighted method
+        scaler = StandardScaler()
+        X_scaled = scaler.fit_transform(X_all)
+        weights = build_group_weights(n_mfcc, n_mels, n_genres, include_genre)
+        if X_scaled.shape[1] != len(weights):
+            raise ValueError(
+                f"Expected {len(weights)} dims after feature concat, got {X_scaled.shape[1]}"
+            )
+        return (X_scaled * weights).astype(np.float32)
 
 
 def _load_genre_mapping(
@@ -147,7 +294,7 @@ def _collect_feature_vectors(
     for base in base_names:
         feats = {
             key: os.path.join(results_dir, f"{base}_{key}.npy")
-            for key in ["mfcc", "melspectrogram", "spectral_centroid", "zero_crossing_rate"]
+            for key in ["mfcc", "melspectrogram", "spectral_centroid", "spectral_flatness", "zero_crossing_rate"]
         }
         if not all(os.path.isfile(path) for path in feats.values()):
             continue
@@ -180,46 +327,107 @@ def _collect_feature_vectors(
     return file_names, feature_vectors, genres
 
 
-def _select_optimal_k(
+def compute_cluster_range(n_samples: int, n_genres: int = 0) -> Tuple[int, int]:
+    """
+    Compute a sensible cluster search range based on data characteristics.
+    
+    Uses the rule of thumb: k_max ~ sqrt(n/2), with adjustments for genre count.
+    
+    Args:
+        n_samples: Number of data points
+        n_genres: Number of unique genres (0 if unknown or not using genre)
+    
+    Returns:
+        Tuple of (k_min, k_max)
+    """
+    k_min = 2
+    
+    # Rule of thumb: sqrt(n/2)
+    k_max_data = int(np.sqrt(n_samples / 2))
+    
+    # Adjust based on genre count if available
+    if n_genres > 0:
+        # Allow up to 1.5x the genre count, but cap reasonably
+        k_max_genre = int(n_genres * 1.5)
+        k_max = min(k_max_data, k_max_genre, 50)
+    else:
+        k_max = min(k_max_data, 30)
+    
+    # Ensure sensible bounds
+    k_max = max(k_max, k_min + 1)
+    
+    return k_min, k_max
+
+
+def _select_optimal_k_bic(
     X: np.ndarray,
-    initial_k: int,
     k_min: int,
     k_max: int,
-) -> Tuple[int, Optional[np.ndarray], Optional[np.ndarray]]:
-    """Pick the number of clusters that maximizes the silhouette score."""
-    best_k = initial_k
+) -> Tuple[int, Optional[np.ndarray], Optional[np.ndarray], List[float]]:
+    """
+    Pick the number of clusters using BIC (consistent with GMM/VaDE).
+    
+    Uses a GMM with spherical covariance to approximate K-Means BIC.
+    This provides consistency with GMM's selection criterion.
+    """
+    from sklearn.mixture import GaussianMixture
+    
+    best_k = k_min
     best_labels: Optional[np.ndarray] = None
     best_centers: Optional[np.ndarray] = None
-    best_score = -np.inf
-
+    best_bic = float('inf')
+    bic_scores: List[float] = []
+    
+    print(f"Searching for optimal k using BIC ({k_min}-{k_max})...")
+    
     for k in range(k_min, k_max + 1):
-        estimator = KMeans(n_clusters=k, random_state=42, n_init=10)
-        labels_tmp = estimator.fit_predict(X)
-        unique_count = len(np.unique(labels_tmp))
-        if unique_count < 2 or unique_count >= len(labels_tmp):
+        try:
+            # Use GMM with spherical covariance (equivalent to K-Means assumption)
+            gmm = GaussianMixture(
+                n_components=k,
+                covariance_type='spherical',
+                n_init=3,
+                max_iter=100,
+                random_state=42,
+            )
+            gmm.fit(X)
+            bic = gmm.bic(X)
+            bic_scores.append(bic)
+            
+            if not gmm.converged_:
+                print(f"  K={k}: BIC={bic:.2f} (did not converge)")
+                continue
+            
+            print(f"  K={k}: BIC={bic:.2f}")
+            
+            if bic < best_bic:
+                best_bic = bic
+                best_k = k
+                # Get K-Means solution for this k
+                estimator = KMeans(n_clusters=k, random_state=42, n_init=10)
+                best_labels = estimator.fit_predict(X)
+                best_centers = estimator.cluster_centers_
+                
+        except Exception as e:
+            print(f"  K={k}: Failed ({str(e)[:50]}...)")
+            bic_scores.append(float('inf'))
             continue
-        silhouette = silhouette_score(X, labels_tmp)
-        if silhouette > best_score:
-            best_score = silhouette
-            best_k = k
-            best_labels = labels_tmp
-            best_centers = estimator.cluster_centers_
-
+    
     if best_labels is not None:
-        print(f"Optimal k (silhouette) -> {best_k}")
+        print(f"Optimal k (BIC) -> {best_k} (BIC={best_bic:.2f})")
     else:
-        print("Silhouette-based search did not improve on the initial cluster count")
-
-    return best_k, best_labels, best_centers
+        print("BIC-based search failed, using fallback")
+    
+    return best_k, best_labels, best_centers, bic_scores
 
 
 def run_kmeans_clustering(
     audio_dir: str = "audio_files",
     results_dir: str = "output/results",
     n_clusters: int = 3,
-    dynamic_cluster_selection: bool = False,
-    dynamic_k_min: int = 2,
-    dynamic_k_max: int = 10,
+    dynamic_cluster_selection: bool = True,
+    dynamic_k_min: Optional[int] = None,
+    dynamic_k_max: Optional[int] = None,
     n_mfcc: int = fv.n_mfcc,
     n_mels: int = fv.n_mels,
     include_genre: bool = fv.include_genre,
@@ -235,32 +443,33 @@ def run_kmeans_clustering(
         raise RuntimeError("No songs with complete feature files were found.")
 
     X_all = np.vstack(feature_vectors)
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X_all)
-
-    weights = build_group_weights(
-        n_mfcc=n_mfcc, 
-        n_mels=n_mels, 
+    
+    # Use the unified feature preparation (PCA per group or weighted)
+    X_prepared = prepare_features(
+        X_all,
+        n_mfcc=n_mfcc,
+        n_mels=n_mels,
         n_genres=len(unique_genres),
-        include_genre=include_genre
+        include_genre=include_genre,
     )
-    if X_scaled.shape[1] != len(weights):
-        raise ValueError(
-            f"Expected {len(weights)} dims after feature concat, got {X_scaled.shape[1]}"
-        )
-    X_weighted = X_scaled * weights
 
     labels: Optional[np.ndarray] = None
     centers: Optional[np.ndarray] = None
+    bic_scores: Optional[List[float]] = None
 
     if dynamic_cluster_selection:
-        # Adapt max clusters if we have more genres than the default max
-        if len(unique_genres) > dynamic_k_max:
-            print(f"Adjusting max clusters search range from {dynamic_k_max} to {len(unique_genres) + 2} (based on genre count)")
-            dynamic_k_max = len(unique_genres) + 2
+        n_samples = X_prepared.shape[0]
+        
+        # Compute data-driven cluster range if not explicitly provided
+        auto_k_min, auto_k_max = compute_cluster_range(n_samples, len(unique_genres))
+        k_min = dynamic_k_min if dynamic_k_min is not None else auto_k_min
+        k_max = dynamic_k_max if dynamic_k_max is not None else auto_k_max
+        
+        print(f"Dynamic cluster selection: searching k in [{k_min}, {k_max}]")
+        print(f"  (Based on {n_samples} samples and {len(unique_genres)} genres)")
 
-        best_k, best_labels, best_centers = _select_optimal_k(
-            X_weighted, n_clusters, dynamic_k_min, dynamic_k_max
+        best_k, best_labels, best_centers, bic_scores = _select_optimal_k_bic(
+            X_prepared, k_min, k_max
         )
         n_clusters = best_k
         if best_labels is not None and best_centers is not None:
@@ -269,11 +478,11 @@ def run_kmeans_clustering(
 
     if labels is None or centers is None:
         estimator = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
-        labels = estimator.fit_predict(X_weighted)
+        labels = estimator.fit_predict(X_prepared)
         centers = estimator.cluster_centers_
 
-    coords = PCA(n_components=2, random_state=42).fit_transform(X_weighted)
-    distances = np.linalg.norm(X_weighted - centers[labels], axis=1)
+    coords = PCA(n_components=2, random_state=42).fit_transform(X_prepared)
+    distances = np.linalg.norm(X_prepared - centers[labels], axis=1)
 
     df = pd.DataFrame(
         {
@@ -287,7 +496,21 @@ def run_kmeans_clustering(
     )
 
     output_dir = Path("output/clustering_results")
+    metrics_dir = Path("output/metrics")
     output_dir.mkdir(parents=True, exist_ok=True)
+    metrics_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Save BIC scores if available
+    if bic_scores is not None:
+        k_min = dynamic_k_min if dynamic_k_min is not None else 2
+        selection_df = pd.DataFrame({
+            "K": list(range(k_min, k_min + len(bic_scores))),
+            "BIC": bic_scores,
+        })
+        selection_path = metrics_dir / "kmeans_selection_criteria.csv"
+        selection_df.to_csv(selection_path, index=False)
+        print(f"Stored BIC diagnostics -> {selection_path}")
+    
     csv_path = output_dir / "audio_clustering_results_kmeans.csv"
     df.to_csv(csv_path, index=False)
     print(f"Results written to -> {csv_path}")
@@ -300,7 +523,7 @@ if __name__ == "__main__":
         audio_dir="audio_files",
         results_dir="output/features",
         n_clusters=5,
-        dynamic_cluster_selection=False,
+        dynamic_cluster_selection=True,
         include_genre=fv.include_genre,
     )
 

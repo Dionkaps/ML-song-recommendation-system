@@ -151,8 +151,8 @@ def process_song(song_data):
         #  Add genre validation BEFORE search/download
         genre = song_data.get('genre', '').strip() if isinstance(song_data, dict) else ''
         
-        if not genre:
-            print(f"[{index}] Skipping '{song_name}' - no genre in dataset")
+        if not genre or genre.lower() == 'unknown':
+            print(f"[{index}] Skipping '{song_name}' - no genre or unknown genre in dataset")
             return None
 
         if not song_name:
