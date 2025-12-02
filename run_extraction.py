@@ -1,180 +1,213 @@
+"""
+Audio Feature Extraction Pipeline - Main Entry Point
+
+This script coordinates feature extraction using three pretrained audio models:
+    1. EnCodecMAE - Self-supervised audio encoder (modern, Python 3.12)
+    2. MusiCNN    - Music tagging CNN (legacy, Python 3.7)
+    3. MERT       - Music understanding transformer (modern, Python 3.12)
+
+IMPORTANT: Due to dependency conflicts, the models require different Python environments:
+
+    EnCodecMAE & MERT: Use .venv-encodecmae (Python 3.12)
+    MusiCNN:          Use .venv-musicnn (Python 3.7)
+
+USAGE:
+======
+
+Option 1: Run individual extraction scripts (RECOMMENDED)
+---------------------------------------------------------
+# For EnCodecMAE (from encodecmae folder to avoid import conflicts):
+.\\.venv-encodecmae\\Scripts\\Activate.ps1
+cd encodecmae
+python ../scripts/extract_encodecmae.py --audio_dir ../audio_files --output_dir ../output/embeddings/encodecmae --skip_existing
+
+# For MERT:
+.\\.venv-encodecmae\\Scripts\\Activate.ps1
+python scripts/extract_mert.py --audio_dir audio_files --output_dir output/embeddings/mert --skip_existing
+
+# For MusiCNN:
+.\\.venv-musicnn\\Scripts\\Activate.ps1
+python scripts/extract_musicnn.py --audio_dir audio_files --output_dir output/embeddings/musicnn --skip_existing
+
+Option 2: Run this orchestrator script
+--------------------------------------
+This script will print the commands you need to run manually, since it cannot
+switch Python environments automatically.
+
+python run_extraction.py --models encodecmae mert musicnn --audio_dir audio_files
+"""
+
 import os
+import sys
 import glob
 import argparse
-import time
 from pathlib import Path
-from src.features.extract_embeddings import (
-    extract_openl3, extract_crepe, extract_madmom, extract_mert,
-    get_openl3_model, get_mert_model, get_madmom_processor
-)
+
+
+def get_audio_files(audio_dir, limit=None):
+    """Find all audio files in directory."""
+    audio_extensions = ['*.mp3', '*.wav', '*.flac', '*.m4a']
+    audio_files = []
+    for ext in audio_extensions:
+        audio_files.extend(glob.glob(os.path.join(audio_dir, ext)))
+    
+    if limit:
+        audio_files = audio_files[:limit]
+    
+    return audio_files
+
+
+def print_extraction_commands(args):
+    """Print the commands needed to run extraction for each model."""
+    
+    project_root = Path(__file__).resolve().parent
+    audio_dir = args.audio_dir
+    output_base = args.output_base
+    
+    skip_flag = "--skip_existing" if args.skip_existing else ""
+    verbose_flag = "--verbose" if args.verbose else ""
+    limit_flag = f"--limit {args.limit}" if args.limit else ""
+    
+    print("\n" + "=" * 70)
+    print("AUDIO FEATURE EXTRACTION - COMMAND REFERENCE")
+    print("=" * 70)
+    
+    audio_files = get_audio_files(audio_dir)
+    print(f"\nFound {len(audio_files)} audio files in '{audio_dir}'")
+    
+    if args.limit:
+        print(f"(Limited to {args.limit} files)")
+    
+    print("\n" + "-" * 70)
+    print("Run these commands in order (each in its appropriate environment):")
+    print("-" * 70)
+    
+    if 'encodecmae' in args.models:
+        print("\n[1] EnCodecMAE Extraction (.venv-encodecmae environment)")
+        print("    " + "-" * 50)
+        print(f"""
+    # Activate the EnCodecMAE environment
+    .\\.venv-encodecmae\\Scripts\\Activate.ps1
+    
+    # Change to encodecmae folder (to avoid import conflicts)
+    cd encodecmae
+    
+    # Run extraction
+    python ../scripts/extract_encodecmae.py ^
+        --audio_dir "../{audio_dir}" ^
+        --output_dir "../{output_base}/encodecmae" ^
+        {skip_flag} {verbose_flag} {limit_flag}
+    
+    # Return to project root
+    cd ..
+""")
+    
+    if 'mert' in args.models:
+        print("\n[2] MERT Extraction (.venv-encodecmae environment)")
+        print("    " + "-" * 50)
+        print(f"""
+    # Activate the EnCodecMAE environment (same env works for MERT)
+    .\\.venv-encodecmae\\Scripts\\Activate.ps1
+    
+    # Run extraction
+    python scripts/extract_mert.py ^
+        --audio_dir "{audio_dir}" ^
+        --output_dir "{output_base}/mert" ^
+        {skip_flag} {verbose_flag} {limit_flag}
+""")
+    
+    if 'musicnn' in args.models:
+        print("\n[3] MusiCNN Extraction (.venv-musicnn environment)")
+        print("    " + "-" * 50)
+        print(f"""
+    # Activate the MusiCNN environment (Python 3.7)
+    .\\.venv-musicnn\\Scripts\\Activate.ps1
+    
+    # Run extraction  
+    python scripts/extract_musicnn.py ^
+        --audio_dir "{audio_dir}" ^
+        --output_dir "{output_base}/musicnn" ^
+        {skip_flag} {verbose_flag} {limit_flag}
+""")
+    
+    print("\n" + "=" * 70)
+    print("OUTPUT STRUCTURE")
+    print("=" * 70)
+    print(f"""
+    {output_base}/
+    ├── encodecmae/     # EnCodecMAE embeddings (~768-dim vectors)
+    │   └── <song_name>.npy
+    ├── mert/           # MERT embeddings (~768-dim vectors)
+    │   └── <song_name>.npy
+    └── musicnn/        # MusiCNN embeddings (~200-dim vectors)
+        └── <song_name>.npy
+""")
+    
+    print("=" * 70)
+    print("\nTIP: Use --skip_existing to resume interrupted extractions")
+    print("=" * 70 + "\n")
+
+
+def check_existing_embeddings(output_base, models):
+    """Check how many embeddings already exist for each model."""
+    print("\n" + "-" * 50)
+    print("Existing Embeddings Status:")
+    print("-" * 50)
+    
+    for model in models:
+        model_dir = os.path.join(output_base, model)
+        if os.path.exists(model_dir):
+            npy_files = glob.glob(os.path.join(model_dir, "*.npy"))
+            print(f"  {model.upper():12s}: {len(npy_files):4d} embeddings")
+        else:
+            print(f"  {model.upper():12s}:    0 embeddings (directory not found)")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Extract audio embeddings.")
-    parser.add_argument("--audio_dir", type=str, default="audio_files", 
-                        help="Directory containing audio files.")
-    parser.add_argument("--output_base", type=str, default="output/embeddings", 
-                        help="Base directory for output.")
-    parser.add_argument("--models", type=str, nargs='+', 
-                        default=['openl3', 'crepe', 'madmom', 'mert'],
-                        help="Models to use (space-separated). Options: openl3, crepe, madmom, mert")
+    parser = argparse.ArgumentParser(
+        description="Audio Feature Extraction Pipeline Orchestrator",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__
+    )
+    parser.add_argument("--audio_dir", type=str, default="audio_files",
+                        help="Directory containing audio files")
+    parser.add_argument("--output_base", type=str, default="output/embeddings",
+                        help="Base directory for output embeddings")
+    parser.add_argument("--models", type=str, nargs='+',
+                        default=['encodecmae', 'mert', 'musicnn'],
+                        choices=['encodecmae', 'mert', 'musicnn'],
+                        help="Models to use for extraction")
     parser.add_argument("--skip_existing", action='store_true',
                         help="Skip files that already have embeddings")
     parser.add_argument("--verbose", action='store_true',
                         help="Print verbose output")
     parser.add_argument("--limit", type=int, default=None,
                         help="Limit the number of files to process")
+    parser.add_argument("--status", action='store_true',
+                        help="Just show status of existing embeddings")
     args = parser.parse_args()
-
-    # Find audio files
-    audio_extensions = ['*.mp3', '*.wav', '*.flac', '*.m4a']
-    audio_files = []
-    for ext in audio_extensions:
-        audio_files.extend(glob.glob(os.path.join(args.audio_dir, ext)))
     
-    print(f"Found {len(audio_files)} audio files.")
+    # Show header
+    print("\n" + "=" * 70)
+    print("   AUDIO FEATURE EXTRACTION PIPELINE")
+    print("   Using: EnCodecMAE, MERT, and MusiCNN")
+    print("=" * 70)
     
-    if args.limit:
-        print(f"Limiting to {args.limit} files.")
-        audio_files = audio_files[:args.limit]
-    
+    # Check audio files exist
+    audio_files = get_audio_files(args.audio_dir, args.limit)
     if len(audio_files) == 0:
-        print(f"No audio files found in {args.audio_dir}")
+        print(f"\n❌ No audio files found in '{args.audio_dir}'")
+        print("   Supported formats: .mp3, .wav, .flac, .m4a")
         return
-
-    # Create output directories
-    for model in args.models:
-        os.makedirs(os.path.join(args.output_base, model), exist_ok=True)
     
-    # Pre-load models once (this is the key optimization!)
-    print("\n=== Loading models ===")
-    models_cache = {}
+    # Show existing embeddings status
+    check_existing_embeddings(args.output_base, args.models)
     
-    if 'openl3' in args.models:
-        models_cache['openl3_model'] = get_openl3_model()
+    if args.status:
+        return
     
-    if 'mert' in args.models:
-        mert_model, mert_extractor, mert_device = get_mert_model()
-        models_cache['mert_model'] = mert_model
-        models_cache['mert_extractor'] = mert_extractor
-        models_cache['mert_device'] = mert_device
-    
-    if 'madmom' in args.models:
-        models_cache['madmom_processor'] = get_madmom_processor()
-    
-    print("All models loaded!\n")
-    
-    # Process each audio file
-    start_time = time.time()
-    success_counts = {model: 0 for model in args.models}
-    failed_counts = {model: 0 for model in args.models}
-    skipped_counts = {model: 0 for model in args.models}
-    
-    for idx, audio_path in enumerate(audio_files, 1):
-        basename = os.path.splitext(os.path.basename(audio_path))[0]
-        print(f"\n[{idx}/{len(audio_files)}] Processing: {basename}")
-        
-        # OpenL3
-        if 'openl3' in args.models:
-            output_path = os.path.join(args.output_base, 'openl3', f"{basename}.npy")
-            if args.skip_existing and os.path.exists(output_path):
-                print(f"  ✓ OpenL3: Skipped (already exists)")
-                skipped_counts['openl3'] += 1
-            else:
-                success = extract_openl3(
-                    audio_path, 
-                    os.path.join(args.output_base, 'openl3'),
-                    model=models_cache.get('openl3_model'),
-                    verbose=args.verbose
-                )
-                if success:
-                    success_counts['openl3'] += 1
-                    print(f"  ✓ OpenL3: Success")
-                else:
-                    failed_counts['openl3'] += 1
-                    print(f"  ✗ OpenL3: Failed")
-        
-        # CREPE
-        if 'crepe' in args.models:
-            output_path = os.path.join(args.output_base, 'crepe', f"{basename}.npy")
-            if args.skip_existing and os.path.exists(output_path):
-                print(f"  ✓ CREPE: Skipped (already exists)")
-                skipped_counts['crepe'] += 1
-            else:
-                success = extract_crepe(
-                    audio_path, 
-                    os.path.join(args.output_base, 'crepe'),
-                    verbose=args.verbose
-                )
-                if success:
-                    success_counts['crepe'] += 1
-                    print(f"  ✓ CREPE: Success")
-                else:
-                    failed_counts['crepe'] += 1
-                    print(f"  ✗ CREPE: Failed")
-        
-        # madmom
-        if 'madmom' in args.models:
-            output_path = os.path.join(args.output_base, 'madmom', f"{basename}.npy")
-            if args.skip_existing and os.path.exists(output_path):
-                print(f"  ✓ madmom: Skipped (already exists)")
-                skipped_counts['madmom'] += 1
-            else:
-                success = extract_madmom(
-                    audio_path, 
-                    os.path.join(args.output_base, 'madmom'),
-                    processor=models_cache.get('madmom_processor'),
-                    verbose=args.verbose
-                )
-                if success:
-                    success_counts['madmom'] += 1
-                    print(f"  ✓ madmom: Success")
-                else:
-                    failed_counts['madmom'] += 1
-                    print(f"  ✗ madmom: Failed")
-        
-        # MERT
-        if 'mert' in args.models:
-            output_path = os.path.join(args.output_base, 'mert', f"{basename}.npy")
-            if args.skip_existing and os.path.exists(output_path):
-                print(f"  ✓ MERT: Skipped (already exists)")
-                skipped_counts['mert'] += 1
-            else:
-                success = extract_mert(
-                    audio_path, 
-                    os.path.join(args.output_base, 'mert'),
-                    model=models_cache.get('mert_model'),
-                    feature_extractor=models_cache.get('mert_extractor'),
-                    device=models_cache.get('mert_device'),
-                    verbose=args.verbose
-                )
-                if success:
-                    success_counts['mert'] += 1
-                    print(f"  ✓ MERT: Success")
-                else:
-                    failed_counts['mert'] += 1
-                    print(f"  ✗ MERT: Failed")
-        
-        # Show progress
-        elapsed = time.time() - start_time
-        avg_time = elapsed / idx
-        remaining = avg_time * (len(audio_files) - idx)
-        print(f"  Elapsed: {elapsed/60:.1f}m | Est. remaining: {remaining/60:.1f}m")
-    
-    # Print summary
-    print("\n" + "="*60)
-    print("EXTRACTION COMPLETE")
-    print("="*60)
-    total_time = time.time() - start_time
-    print(f"Total time: {total_time/60:.1f} minutes ({total_time/3600:.2f} hours)")
-    print(f"Processed {len(audio_files)} audio files")
-    print("\nResults by model:")
-    for model in args.models:
-        print(f"  {model.upper()}:")
-        print(f"    Success: {success_counts[model]}")
-        print(f"    Failed: {failed_counts[model]}")
-        print(f"    Skipped: {skipped_counts[model]}")
-    print("="*60)
+    # Print the commands to run
+    print_extraction_commands(args)
 
 
 if __name__ == "__main__":

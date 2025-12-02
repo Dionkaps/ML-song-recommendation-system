@@ -1,17 +1,65 @@
+# Audio files (too large for git)
 audio_files/
 audio_files_1/
 audio_files_2/
-audio_files_all
+audio_files_all/
 src/data_collection/audio_files/
+genres_original/
+
+# Dataset files
 millionsongsubset_extracted/
 millionsongsubset.tar.gz
+
+# Output directories (generated files)
 results/
 processed_results/
 output/embeddings/
-__pycache__/
-genres_original/
 output/features/
+output/metrics/
+output/spectral/
 
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environments
+.venv/
+.venv-encodecmae/
+.venv-musicnn/
+venv/
+env/
+ENV/
+
+# IDE settings
 .vscode/
-docs/
+.idea/
+*.swp
+*.swo
+
+# Model files and checkpoints (large files)
+encodecmae/
+musicnn_keras/keras_checkpoints/
+*.h5
+*.pt
+*.pth
+*.ckpt
+
+# Temporary files
+*.tmp
+*.temp
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Jupyter notebooks checkpoints
+.ipynb_checkpoints/
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
 

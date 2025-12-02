@@ -1,6 +1,13 @@
 # ML Song Recommendation System
 
-A machine learning project that analyzes audio files to create a content-based music recommendation system using clustering algorithms.
+A machine learning project that analyzes audio files to create a content-based music recommendation system using deep learning embeddings and clustering algorithms.
+
+## Key Features
+
+- **🎵 Deep Audio Embeddings**: Extract rich audio representations using state-of-the-art models (EnCodecMAE, MERT, MusiCNN)
+- **🔬 Multiple Clustering Algorithms**: K-Means, GMM, HDBSCAN, and VaDE (deep learning)
+- **🎨 Interactive UI**: Browse songs, get recommendations, play audio
+- **📊 Visualization**: PCA-based 2D visualization of clusters
 
 ## Project Structure
 
@@ -34,6 +41,29 @@ ML-song-recommendation-system/
 └── requirements.txt              # Project dependencies
 
 ```
+
+## Audio Embedding Extraction (NEW)
+
+This project now supports extracting deep audio embeddings using three pretrained models:
+
+| Model | Description | Embedding Dim | Python |
+|-------|-------------|---------------|--------|
+| **EnCodecMAE** | Self-supervised audio encoder | 768 | 3.12 |
+| **MERT** | Music understanding transformer | 768 | 3.12 |
+| **MusiCNN** | Music tagging CNN | 753 | 3.7 |
+
+### Quick Setup
+
+```powershell
+# See available extraction commands
+python run_extraction.py
+
+# Check extraction status
+python run_extraction.py --status
+```
+
+📖 **Full Guide**: [docs/AUDIO_EMBEDDING_EXTRACTION.md](docs/AUDIO_EMBEDDING_EXTRACTION.md)  
+⚡ **Quick Start**: [docs/QUICKSTART_EMBEDDINGS.md](docs/QUICKSTART_EMBEDDINGS.md)
 
 ## Quick Start
 
@@ -97,12 +127,21 @@ python run_pipeline.py --skip extract plot
 
 ### Feature Extraction
 The system extracts these audio features:
+
+**Traditional Features:**
 - **MFCC** (Mel-frequency cepstral coefficients)
 - **Mel-spectrogram**
 - **Spectral centroid**
 - **Spectral flatness**
 - **Zero-crossing rate**
 - **Genre** (one-hot encoded)
+
+**Deep Learning Embeddings:**
+- **EnCodecMAE** - Self-supervised audio representations (768-dim)
+- **MERT** - Music-specific transformer features (768-dim)
+- **MusiCNN** - Music tagging features (753-dim)
+
+See [Audio Embedding Extraction Guide](docs/AUDIO_EMBEDDING_EXTRACTION.md) for details.
 
 ### Configuration
 Edit `config/feature_vars.py` to adjust:
@@ -147,16 +186,21 @@ python scripts/ploting.py output/results
 
 ## Output Files
 
-- `output/results/`: Extracted features (.npy files)
-- `output/audio_clustering_results_kmeans.csv`: K-Means clustering results
-- `output/audio_clustering_results_gmm.csv`: GMM clustering results
-- `output/audio_clustering_results_hdbscan.csv`: HDBSCAN clustering results
-- `output/audio_clustering_results_vade.csv`: VaDE clustering results
-- `output/results/wkbsc_feature_weights.npy`: Learned feature weights
+- `output/embeddings/`: Deep learning embeddings (.npy files)
+  - `encodecmae/` - EnCodecMAE embeddings
+  - `mert/` - MERT embeddings
+  - `musicnn/` - MusiCNN embeddings
+- `output/features/`: Traditional extracted features (.npy files)
+- `output/clustering_results/`: Clustering results (.csv files)
+  - `audio_clustering_results_kmeans.csv`
+  - `audio_clustering_results_gmm.csv`
+  - `audio_clustering_results_hdbscan.csv`
+  - `audio_clustering_results_vade.csv`
 
 ## Requirements
 
-- Python 3.7+
+- Python 3.12 (for EnCodecMAE and MERT)
+- Python 3.7 (for MusiCNN - due to numpy<1.17 requirement)
 - NumPy
 - Pandas
 - scikit-learn
@@ -164,15 +208,22 @@ python scripts/ploting.py output/results
 - matplotlib
 - pygame
 - hdbscan
-- PyTorch (for VaDE only)
+- PyTorch (for VaDE and modern embeddings)
+- TensorFlow 2.7.4 (for MusiCNN)
+- transformers (for MERT)
 - tkinter (usually comes with Python)
 
 See `requirements.txt` for specific versions.
 
+## Documentation
+
+| Document | Description |
+|----------|-------------|
+| [Audio Embedding Extraction](docs/AUDIO_EMBEDDING_EXTRACTION.md) | Complete guide to extracting deep audio embeddings |
+| [Quick Start: Embeddings](docs/QUICKSTART_EMBEDDINGS.md) | 5-minute setup for embedding extraction |
+| [VaDE Implementation](docs/VADE_IMPLEMENTATION.md) | Deep learning clustering with VAE+GMM |
+| [Feature Weights Guide](docs/FEATURE_WEIGHTS_GUIDE.md) | Guide to WKBSC feature weighting |
+
 ## License
 
 See LICENSE file for details.
-
-## Documentation
-
-For detailed documentation, see `docs/README.md`.
