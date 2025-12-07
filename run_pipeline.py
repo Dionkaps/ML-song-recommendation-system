@@ -120,6 +120,49 @@ def main():
         print("="*60)
         print("Download step complete!")
         print("="*60 + "\n")
+        
+        # Normalize audio files to exactly 29 seconds
+        print("\n" + "="*60)
+        print("AUDIO NORMALIZATION: Standardizing to 29 seconds")
+        print("="*60)
+        print("   - Removing songs shorter than 29 seconds")
+        print("   - Cropping songs longer than 29 seconds")
+        print()
+        
+        from src.utils.audio_normalizer import normalize_audio_files
+        normalize_stats = normalize_audio_files(str(audio_dir))
+        
+        # Update CSV to remove entries for deleted files
+        if normalize_stats.get('removed', 0) > 0 and csv_path.exists():
+            print("\n🧹 Updating CSV to remove entries for deleted audio files...")
+            removed_names = {name for name, _ in normalize_stats.get('removed_files', [])}
+            
+            # Read existing CSV
+            import csv as csv_module
+            rows_to_keep = []
+            try:
+                with open(csv_path, 'r', encoding='utf-8') as f:
+                    reader = csv_module.DictReader(f)
+                    fieldnames = reader.fieldnames
+                    for row in reader:
+                        # Check if the audio file still exists
+                        filename = f"{row.get('artist', '')} - {row.get('title', '')}.mp3"
+                        if filename not in removed_names:
+                            rows_to_keep.append(row)
+                
+                # Write updated CSV
+                with open(csv_path, 'w', encoding='utf-8', newline='') as f:
+                    writer = csv_module.DictWriter(f, fieldnames=fieldnames)
+                    writer.writeheader()
+                    writer.writerows(rows_to_keep)
+                
+                print(f"✓ CSV updated: {len(rows_to_keep)} entries remaining")
+            except Exception as e:
+                print(f"⚠️  Error updating CSV: {e}")
+        
+        print("="*60)
+        print("Audio normalization complete!")
+        print("="*60 + "\n")
 
     if "extract" not in args.skip:
         print("\nExtracting audio features (MFCC, mel-spectrogram, etc.)...")
