@@ -3,9 +3,10 @@ import glob
 import multiprocessing
 import time
 import warnings
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 import sys
+from tqdm import tqdm
 
 # Add parent directories to path for imports
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
@@ -32,76 +33,153 @@ def suppress_stderr():
 
 
 def extract_mfcc(y, sr, n_mfcc=fv.n_mfcc):
+    """Extract MFCC (Mel-frequency cepstral coefficients)."""
     return librosa.feature.mfcc(y=y, sr=sr, n_mfcc=n_mfcc)
 
 
-def extract_melspectrogram(y, sr, n_fft=fv.n_fft, hop_length=fv.hop_length, n_mels=fv.n_mels):
-    mel_spectrogram = librosa.feature.melspectrogram(
-        y=y, sr=sr, n_fft=n_fft, hop_length=hop_length, n_mels=n_mels
-    )
-    return librosa.power_to_db(mel_spectrogram, ref=np.max)
+def extract_delta_mfcc(mfcc):
+    """Extract ΔMFCC (first derivatives of MFCC)."""
+    return librosa.feature.delta(mfcc)
+
+
+def extract_delta2_mfcc(mfcc):
+    """Extract ΔΔMFCC (second derivatives of MFCC)."""
+    return librosa.feature.delta(mfcc, order=2)
 
 
 def extract_spectral_centroid(y, sr, hop_length=fv.hop_length, n_fft=fv.n_fft):
+    """Extract spectral centroid - brightness of sound."""
     return librosa.feature.spectral_centroid(
         y=y, sr=sr, hop_length=hop_length, n_fft=n_fft
     )
 
 
+def extract_spectral_rolloff(y, sr, hop_length=fv.hop_length, n_fft=fv.n_fft, roll_percent=0.85):
+    """Extract spectral rolloff - frequency below which roll_percent of energy is contained."""
+    return librosa.feature.spectral_rolloff(
+        y=y, sr=sr, hop_length=hop_length, n_fft=n_fft, roll_percent=roll_percent
+    )
+
+
+def extract_spectral_flux(y, sr, hop_length=fv.hop_length, n_fft=fv.n_fft):
+    """
+    Extract spectral flux - measure of how quickly the spectrum changes.
+    Computed as the onset strength envelope which captures spectral change.
+    """
+    # Onset strength is essentially spectral flux - measures spectral change over time
+    onset_env = librosa.onset.onset_strength(y=y, sr=sr, hop_length=hop_length, n_fft=n_fft)
+    # Return as 2D array to match other features [1, n_frames]
+    return onset_env.reshape(1, -1)
+
+
 def extract_spectral_flatness(y, hop_length=fv.hop_length, n_fft=fv.n_fft):
+    """Extract spectral flatness - tonal vs noisy characteristics."""
     return librosa.feature.spectral_flatness(
         y=y, hop_length=hop_length, n_fft=n_fft
     )
 
 
 def extract_zero_crossing_rate(y, hop_length=fv.hop_length):
+    """Extract zero crossing rate - noisiness/percussiveness."""
     return librosa.feature.zero_crossing_rate(y=y, hop_length=hop_length)
+
+
+def extract_chroma(y, sr, hop_length=fv.hop_length, n_fft=fv.n_fft, n_chroma=12):
+    """Extract chroma features - 12-dimensional pitch class profile."""
+    return librosa.feature.chroma_stft(
+        y=y, sr=sr, hop_length=hop_length, n_fft=n_fft, n_chroma=n_chroma
+    )
+
+
+def extract_beat_strength(y, sr, hop_length=fv.hop_length):
+    """
+    Extract beat strength / onset rate features.
+    Returns tempo (BPM) and mean onset strength as a combined feature.
+    """
+    # Get tempo and beat frames
+    tempo, beat_frames = librosa.beat.beat_track(y=y, sr=sr, hop_length=hop_length)
+    
+    # Get onset strength envelope
+    onset_env = librosa.onset.onset_strength(y=y, sr=sr, hop_length=hop_length)
+    
+    # Calculate statistics
+    if isinstance(tempo, np.ndarray):
+        tempo = float(tempo[0]) if len(tempo) > 0 else 0.0
+    
+    mean_onset_strength = float(np.mean(onset_env))
+    std_onset_strength = float(np.std(onset_env))
+    
+    # Calculate onset rate (onsets per second)
+    onset_frames = librosa.onset.onset_detect(y=y, sr=sr, hop_length=hop_length)
+    duration = len(y) / sr
+    onset_rate = len(onset_frames) / duration if duration > 0 else 0.0
+    
+    # Return as 2D array [4 features, 1 frame] for consistency
+    # Features: tempo, mean_onset_strength, std_onset_strength, onset_rate
+    return np.array([[tempo], [mean_onset_strength], [std_onset_strength], [onset_rate]])
 
 
 def process_file(audio_path, results_dir, n_mfcc, n_fft, hop_length, n_mels):
     """
     Load an audio file, extract features, and save them to .npy files.
-    Works with flat directory structure (audio_files).
+    
+    Extracts the following features:
+    - MFCC (Mel-frequency cepstral coefficients)
+    - ΔMFCC (first derivatives)
+    - ΔΔMFCC (second derivatives)
+    - Spectral centroid
+    - Spectral rolloff
+    - Spectral flux
+    - Spectral flatness
+    - Zero Crossing Rate (ZCR)
+    - Chroma (12-dim pitch class profile)
+    - Beat strength / onset rate
     """
     filename = os.path.basename(audio_path)
     base_filename = os.path.splitext(filename)[0]
     
     try:
-        print(f"Loading {filename}...")
-        
         # Suppress stderr output during audio loading to hide mpg123 warnings
         with suppress_stderr():
             y, sr = librosa.load(audio_path, sr=None)
             
-        # Extract features
+        # Extract MFCC and derivatives
         mfccs = extract_mfcc(y, sr, n_mfcc)
-        mel_spec = extract_melspectrogram(y, sr, n_fft, hop_length, n_mels)
+        delta_mfcc = extract_delta_mfcc(mfccs)
+        delta2_mfcc = extract_delta2_mfcc(mfccs)
+        
+        # Extract spectral features
         spec_centroid = extract_spectral_centroid(y, sr, hop_length, n_fft)
+        spec_rolloff = extract_spectral_rolloff(y, sr, hop_length, n_fft)
+        spec_flux = extract_spectral_flux(y, sr, hop_length, n_fft)
         spec_flatness = extract_spectral_flatness(y, hop_length, n_fft)
+        
+        # Extract other features
         zcr = extract_zero_crossing_rate(y, hop_length)
+        chroma = extract_chroma(y, sr, hop_length, n_fft)
+        beat_strength = extract_beat_strength(y, sr, hop_length)
 
-        # Save features
+        # Save all features
         np.save(os.path.join(results_dir, f"{base_filename}_mfcc.npy"), mfccs)
-        np.save(os.path.join(results_dir,
-                f"{base_filename}_melspectrogram.npy"), mel_spec)
-        np.save(os.path.join(results_dir,
-                f"{base_filename}_spectral_centroid.npy"), spec_centroid)
-        np.save(os.path.join(results_dir,
-                f"{base_filename}_spectral_flatness.npy"), spec_flatness)
-        np.save(os.path.join(results_dir,
-                f"{base_filename}_zero_crossing_rate.npy"), zcr)
+        np.save(os.path.join(results_dir, f"{base_filename}_delta_mfcc.npy"), delta_mfcc)
+        np.save(os.path.join(results_dir, f"{base_filename}_delta2_mfcc.npy"), delta2_mfcc)
+        np.save(os.path.join(results_dir, f"{base_filename}_spectral_centroid.npy"), spec_centroid)
+        np.save(os.path.join(results_dir, f"{base_filename}_spectral_rolloff.npy"), spec_rolloff)
+        np.save(os.path.join(results_dir, f"{base_filename}_spectral_flux.npy"), spec_flux)
+        np.save(os.path.join(results_dir, f"{base_filename}_spectral_flatness.npy"), spec_flatness)
+        np.save(os.path.join(results_dir, f"{base_filename}_zero_crossing_rate.npy"), zcr)
+        np.save(os.path.join(results_dir, f"{base_filename}_chroma.npy"), chroma)
+        np.save(os.path.join(results_dir, f"{base_filename}_beat_strength.npy"), beat_strength)
 
-        print(f"✓ Finished processing {filename}")
         return base_filename
     except Exception as e:
-        print(f"✗ Error processing {filename}: {e}")
         return None
 
 
 def run_feature_extraction(audio_dir='audio_files', results_dir='output/features'):
     """
     Finds all audio files (.wav, .mp3, .flac, .m4a) in audio_dir and processes them in parallel.
-    Works with flat directory structure - genre info comes from songs_data_with_genre.csv.
+    Works with flat directory structure - genre info comes from unified songs.csv.
     """
     os.makedirs(results_dir, exist_ok=True)
     
@@ -139,7 +217,7 @@ def run_feature_extraction(audio_dir='audio_files', results_dir='output/features
     failed_count = 0
     
     with ProcessPoolExecutor(max_workers=num_workers) as executor:
-        futures = [
+        futures = {
             executor.submit(
                 process_file,
                 audio_path,
@@ -148,17 +226,20 @@ def run_feature_extraction(audio_dir='audio_files', results_dir='output/features
                 fv.n_fft,
                 fv.hop_length,
                 fv.n_mels
-            )
+            ): audio_path
             for audio_path in audio_files
-        ]
+        }
         
-        # Wait for all to complete
-        for future in futures:
+        # Wait for all to complete with progress bar
+        pbar = tqdm(as_completed(futures), total=len(futures),
+                    desc="Extracting features", unit="file")
+        for future in pbar:
             result = future.result()
             if result:
                 processed_count += 1
             else:
                 failed_count += 1
+            pbar.set_postfix(success=processed_count, failed=failed_count)
     
     print(f"\n{'='*60}")
     print(f"Feature Extraction Complete")
@@ -169,7 +250,7 @@ def run_feature_extraction(audio_dir='audio_files', results_dir='output/features
     print(f"{'='*60}\n")
     
     # Note about genre mapping
-    print("NOTE: Genre information should be loaded from data/songs_data_with_genre.csv")
+    print("NOTE: Genre and MSD metadata are loaded from unified data/songs.csv")
     print("      Use genre_mapper.py utility to map features to genres.")
 
 

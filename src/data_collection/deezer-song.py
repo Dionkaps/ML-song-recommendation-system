@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from datetime import datetime
 from pathlib import Path
+from tqdm import tqdm
 
 # Ensure we are running from project root
 project_root = Path(__file__).resolve().parent.parent.parent
@@ -18,33 +19,76 @@ os.chdir(project_root)
 sys.path.insert(0, str(project_root))
 
 DEEZE_AUDIO_FOLDER = "audio_files"
-SONGS_DATA_CSV = os.path.join("data", "songs_data_with_genre.csv")
+UNIFIED_CSV = os.path.join("data", "songs.csv")  # Unified CSV with all song data
 CHECKPOINT_FILE = "download_checkpoint_with_genre.json"
 INPUT_CSV = os.path.join("data", "millionsong_dataset.csv")
+SEARCH_CACHE_FILE = "deezer_search_cache.json"  # Cache successful searches
+
+# Global search cache
+_search_cache = {}
 
 
-def search_song(song_name):
-    """Search for a song on Deezer by name"""
+def load_search_cache():
+    """Load cached search results from previous runs"""
+    global _search_cache
+    if os.path.exists(SEARCH_CACHE_FILE):
+        try:
+            with open(SEARCH_CACHE_FILE, 'r', encoding='utf-8') as f:
+                _search_cache = json.load(f)
+        except Exception:
+            _search_cache = {}
+    return _search_cache
+
+
+def save_search_cache():
+    """Save search cache to file for reuse in future runs"""
     try:
-        search_url = f"https://api.deezer.com/search?q={song_name}"
+        with open(SEARCH_CACHE_FILE, 'w', encoding='utf-8') as f:
+            json.dump(_search_cache, f, indent=2)
+    except Exception:
+        pass
+
+
+def search_song(song_name, artist_name="", use_cache=True):
+    """
+    Search for a song on Deezer using song name + artist name.
+    Uses caching to avoid redundant API calls.
+    """
+    # Check cache first
+    cache_key = f"{song_name}|{artist_name}"
+    if use_cache and cache_key in _search_cache:
+        return _search_cache[cache_key]
+    
+    # Build search query: song + artist
+    if artist_name:
+        query = f"{song_name} {artist_name}"
+    else:
+        query = song_name
+    
+    try:
+        search_url = f"https://api.deezer.com/search?q={query}"
         response = requests.get(search_url, timeout=10)
 
         if response.status_code != 200:
-            print(f"Error searching for song: {response.status_code}")
+            if use_cache:
+                _search_cache[cache_key] = None
             return None
 
         data = response.json()
         if data.get('total', 0) == 0:
-            print(f"No songs found for '{song_name}'")
+            if use_cache:
+                _search_cache[cache_key] = None
             return None
 
-        # Return the first song result
-        return data['data'][0]
+        # Return the first song result and cache it
+        result = data['data'][0]
+        if use_cache:
+            _search_cache[cache_key] = result
+        return result
+        
     except requests.exceptions.Timeout:
-        print(f"Timeout searching for '{song_name}'")
         return None
     except Exception as e:
-        print(f"Error searching for '{song_name}': {str(e)}")
         return None
 
 
@@ -54,7 +98,6 @@ def download_preview(preview_url, output_file):
         response = requests.get(preview_url, stream=True, timeout=15)
 
         if response.status_code != 200:
-            print(f"Error downloading preview: {response.status_code}")
             return False
 
         with open(output_file, 'wb') as f:
@@ -64,10 +107,8 @@ def download_preview(preview_url, output_file):
 
         return True
     except requests.exceptions.Timeout:
-        print(f"Timeout downloading preview from {preview_url}")
         return False
     except Exception as e:
-        print(f"Error downloading preview: {str(e)}")
         return False
 
 
@@ -83,10 +124,7 @@ def download_and_save_song(song, artist_name=""):
     preview_url = song.get('preview', None)
 
     if not preview_url:
-        print(f"No preview available for {title} by {artist}")
         return None
-
-    print(f"Found: {title} by {artist}")
 
     # Ensure the output folder exists
     if not os.path.exists(DEEZE_AUDIO_FOLDER):
@@ -97,21 +135,17 @@ def download_and_save_song(song, artist_name=""):
     valid_filename = sanitize_filename(raw_filename)
     output_file = os.path.join(DEEZE_AUDIO_FOLDER, f"{valid_filename}.mp3")
 
-    print(f"Downloading preview to {output_file}...")
     success = download_preview(preview_url, output_file)
 
     if success:
-        print(f"Download complete! Saved to {output_file}")
         return {"title": title, "artist": artist, "filename": valid_filename + ".mp3"}
     else:
-        print("Download failed")
         # Clean up partially downloaded file if it exists
         if os.path.exists(output_file):
             try:
                 os.remove(output_file)
-                print(f"Cleaned up failed download: {output_file}")
-            except Exception as e:
-                print(f"Warning: Could not remove failed file: {e}")
+            except Exception:
+                pass
         return None
 
 
@@ -126,12 +160,14 @@ def process_song(song_data):
             song_name = song_data.get('title', '').strip()
             artist_name = song_data.get('artist', '').strip()
             index = song_data.get('index', -1)
+            msd_track_id = song_data.get('track_id', None)  # MSD track ID for matching
         else:
             # Fallback for text file format
             song_line = song_data
             song_name = ""
             artist_name = ""
             index = -1
+            msd_track_id = None
             
             if '–' in song_line:
                 parts = song_line.strip().split('–')
@@ -152,29 +188,25 @@ def process_song(song_data):
         genre = song_data.get('genre', '').strip() if isinstance(song_data, dict) else ''
         
         if not genre or genre.lower() == 'unknown':
-            print(f"[{index}] Skipping '{song_name}' - no genre or unknown genre in dataset")
             return None
 
         if not song_name:
             return None
 
-        # Build search query
-        if artist_name:
-            search_query = f"{song_name} {artist_name}"
-            print(f"[{index}] Searching for: {song_name} by {artist_name} (genre: {genre[:30]}...)")
-        else:
-            search_query = song_name
-            print(f"[{index}] Searching for: {song_name} (genre: {genre[:30]}...)")
-
-        # Search and download
-        song = search_song(search_query)
+        # Search and download using simple song + artist search
+        song = search_song(song_name, artist_name, use_cache=True)
         if not song:
             return None
 
         result = download_and_save_song(song, artist_name)
         if result:
-            # Add genre to result (do NOT add 'index' - causes CSV save error)
+            # Store both MSD (original) and Deezer (downloaded) info for the unified CSV
             result['genre'] = genre
+            result['msd_artist'] = artist_name  # Original MSD artist used for search
+            result['msd_title'] = song_name     # Original MSD title used for search
+            result['msd_track_id'] = msd_track_id  # MSD track ID for direct matching
+            result['deezer_artist'] = result.pop('artist')  # Rename to clarify source
+            result['deezer_title'] = result.pop('title')    # Rename to clarify source
         return result
 
     except Exception as e:
@@ -315,8 +347,74 @@ def create_download_statistics_graphs(total_songs, downloaded_count, failed_coun
     return output_dir
 
 
-def save_songs_to_csv(songs_data, filename):
-    """Save the songs data to a CSV file"""
+def update_unified_csv(downloaded_songs):
+    """
+    Update the unified songs.csv with download results.
+    
+    This updates existing rows with Deezer info (artist, title, filename)
+    rather than creating a separate CSV.
+    """
+    import pandas as pd
+    
+    if not downloaded_songs:
+        print("No songs to update in unified CSV.")
+        return
+    
+    if not os.path.exists(UNIFIED_CSV):
+        print(f"Warning: Unified CSV not found at {UNIFIED_CSV}")
+        print("Creating new unified CSV from download data...")
+        # Fallback: create basic CSV if unified doesn't exist
+        df = pd.DataFrame(downloaded_songs)
+        df.columns = ['deezer_title', 'deezer_artist', 'filename', 'genre', 'msd_artist', 'msd_title', 'msd_track_id']
+        df['has_audio'] = True
+        df.to_csv(UNIFIED_CSV, index=False)
+        return
+    
+    try:
+        # Load existing unified CSV
+        unified = pd.read_csv(UNIFIED_CSV)
+        
+        def normalize(s):
+            if pd.isna(s):
+                return ""
+            return str(s).lower().strip()
+        
+        updated_count = 0
+        for song in downloaded_songs:
+            if song is None:
+                continue
+            
+            # Match by MSD track_id if available, else by artist+title
+            msd_track_id = song.get('msd_track_id')
+            msd_artist = song.get('msd_artist', song.get('artist', ''))
+            msd_title = song.get('msd_title', song.get('title', ''))
+            
+            if msd_track_id:
+                mask = unified['msd_track_id'] == msd_track_id
+            else:
+                mask = (unified['msd_artist'].apply(normalize) == normalize(msd_artist)) & \
+                       (unified['msd_title'].apply(normalize) == normalize(msd_title))
+            
+            if mask.any():
+                idx = unified[mask].index[0]
+                unified.loc[idx, 'deezer_artist'] = song.get('deezer_artist', song.get('artist'))
+                unified.loc[idx, 'deezer_title'] = song.get('deezer_title', song.get('title'))
+                unified.loc[idx, 'filename'] = song.get('filename')
+                unified.loc[idx, 'has_audio'] = True
+                updated_count += 1
+        
+        # Save updated unified CSV
+        unified.to_csv(UNIFIED_CSV, index=False)
+        print(f"Updated {updated_count} songs in unified CSV: {UNIFIED_CSV}")
+        
+    except Exception as e:
+        print(f"Error updating unified CSV: {str(e)}")
+        # Fallback to old method
+        save_songs_to_csv_legacy(downloaded_songs, "data/songs_data_with_genre.csv")
+
+
+def save_songs_to_csv_legacy(songs_data, filename):
+    """Legacy method: Save the songs data to a separate CSV file"""
     # Filter out None values
     songs_data = [song for song in songs_data if song]
 
@@ -331,7 +429,14 @@ def save_songs_to_csv(songs_data, filename):
 
             writer.writeheader()
             for song in songs_data:
-                writer.writerow(song)
+                # Map to legacy format
+                row = {
+                    'title': song.get('deezer_title', song.get('title')),
+                    'artist': song.get('deezer_artist', song.get('artist')),
+                    'filename': song.get('filename'),
+                    'genre': song.get('genre')
+                }
+                writer.writerow(row)
 
         print(f"Successfully saved {len(songs_data)} songs to {filename}")
     except Exception as e:
@@ -340,6 +445,11 @@ def save_songs_to_csv(songs_data, filename):
 
 def main():
     start_time = time.time()
+    
+    # Load search cache from previous runs
+    load_search_cache()
+    if _search_cache:
+        print(f"📦 Loaded {len(_search_cache)} cached search results\n")
     
     # Use path relative to project root (since we chdir'd there)
     csv_path = INPUT_CSV
@@ -405,43 +515,96 @@ def main():
     print(f"Starting parallel processing with {num_workers} workers...\n")
 
     songs_data = checkpoint.get('downloaded_songs', [])
-    completed_in_session = 0
-    failed_in_session = 0
+    total_completed = 0
+    total_failed = 0
     
-    with ThreadPoolExecutor(max_workers=num_workers) as executor:
-        # Submit all tasks
-        future_to_song = {executor.submit(
-            process_song, song): song for song in songs_to_process}
-
-        # Process results as they complete
-        for future in as_completed(future_to_song):
-            song_data = future_to_song[future]
-            song_index = song_data.get('index', -1)
+    # Track which songs failed in the current run (separate from checkpoint)
+    failed_indices_this_run = set()
+    
+    # Run download attempts - retry as long as we get successful downloads
+    attempt = 1
+    while True:
+        if attempt > 1:
+            # On retry attempts, only process songs that failed in this run
+            print(f"\n{'='*60}")
+            print(f"RETRY ATTEMPT {attempt - 1} - Re-processing failed songs")
+            print(f"{'='*60}\n")
             
-            try:
-                result = future.result(timeout=30)
+            # Filter to only songs that failed (not in processed_indices but in failed_indices_this_run)
+            songs_to_process = [song for song in songs_list 
+                               if song.get('index', -1) in failed_indices_this_run]
+            
+            if not songs_to_process:
+                print("No more songs to retry!")
+                break
+            
+            print(f"Retrying {len(songs_to_process)} previously failed songs...\n")
+        
+        completed_in_attempt = 0
+        failed_in_attempt = 0
+        failed_indices_this_attempt = set()
+        
+        with ThreadPoolExecutor(max_workers=num_workers) as executor:
+            # Submit all tasks
+            future_to_song = {executor.submit(
+                process_song, song): song for song in songs_to_process}
+
+            # Process results as they complete with progress bar
+            pbar = tqdm(as_completed(future_to_song), total=len(future_to_song), 
+                        desc=f"Downloading (attempt {attempt})", unit="song")
+            for future in pbar:
+                song_data = future_to_song[future]
+                song_index = song_data.get('index', -1)
                 
-                # Mark as processed regardless of success
-                processed_indices.add(song_index)
-                
-                if result:
-                    songs_data.append(result)
-                    completed_in_session += 1
-                else:
-                    failed_in_session += 1
-                
-                # Save checkpoint every 10 songs
-                total_processed = completed_in_session + failed_in_session
-                if total_processed % 10 == 0:
-                    checkpoint['processed_indices'] = list(processed_indices)
-                    checkpoint['downloaded_songs'] = songs_data
-                    save_checkpoint(checkpoint)
-                    print(f"\n--- Checkpoint saved: {total_processed}/{remaining} songs processed ({completed_in_session} success, {failed_in_session} failed) ---\n")
-            except Exception as e:
-                print(f"Error processing song at index {song_index}: {str(e)}")
-                # Mark as processed even if there was an error
-                processed_indices.add(song_index)
-                failed_in_session += 1
+                try:
+                    result = future.result(timeout=30)
+                    
+                    if result:
+                        # Success - mark as processed and remove from failed set
+                        processed_indices.add(song_index)
+                        failed_indices_this_run.discard(song_index)
+                        songs_data.append(result)
+                        completed_in_attempt += 1
+                        total_completed += 1
+                    else:
+                        # Failed - track for retry but don't mark as processed
+                        failed_indices_this_attempt.add(song_index)
+                        failed_in_attempt += 1
+                    
+                    # Update progress bar description
+                    pbar.set_postfix(success=completed_in_attempt, failed=failed_in_attempt)
+                    
+                    # Save checkpoint every 10 successful downloads
+                    if total_completed % 10 == 0 and total_completed > 0:
+                        checkpoint['processed_indices'] = list(processed_indices)
+                        checkpoint['downloaded_songs'] = songs_data
+                        save_checkpoint(checkpoint)
+                except Exception as e:
+                    # Exception - track for retry but don't mark as processed
+                    failed_indices_this_attempt.add(song_index)
+                    failed_in_attempt += 1
+                    pbar.set_postfix(success=completed_in_attempt, failed=failed_in_attempt)
+        
+        # Update total failed count and failed indices for next retry
+        total_failed = len(failed_indices_this_attempt)
+        failed_indices_this_run = failed_indices_this_attempt
+        
+        print(f"\nAttempt {attempt} complete: {completed_in_attempt} success, {failed_in_attempt} failed")
+        
+        # Stop if no successes in this attempt (no point retrying)
+        if completed_in_attempt == 0:
+            print("No successful downloads in this attempt - stopping retries.")
+            break
+        
+        # Stop if no failures to retry
+        if not failed_indices_this_run:
+            print("All songs downloaded successfully!")
+            break
+        
+        # Continue to next retry
+        attempt += 1
+        print(f"\nWaiting 5 seconds before retry...\n")
+        time.sleep(5)
 
     # Final checkpoint save
     checkpoint['processed_indices'] = list(processed_indices)
@@ -450,18 +613,19 @@ def main():
 
     # Count successful downloads
     success_count = len(songs_data)
-    total_processed_in_session = completed_in_session + failed_in_session
 
-    # Save song data to CSV
-    save_songs_to_csv(songs_data, SONGS_DATA_CSV)
+    # Update unified CSV with download results
+    update_unified_csv(songs_data)
 
     elapsed = time.time() - start_time
     print(
-        f"\nSession completed: {total_processed_in_session} songs processed")
-    print(f"  - Successfully downloaded: {success_count}")
-    print(f"  - Failed/Not found: {failed_in_session}")
+        f"\nSession completed: {total_completed} downloaded, {total_failed} still failed")
     print(f"Total successful downloads so far: {success_count} of {total_count} songs")
     print(f"Session time: {elapsed:.2f} seconds")
+    
+    # Save search cache for future runs
+    save_search_cache()
+    print(f"\n💾 Saved {len(_search_cache)} search results to cache for next run")
     
     # Create visualization graphs
     print("\n" + "="*50)
@@ -475,8 +639,8 @@ def main():
     if len(processed_indices) < total_count:
         print(f"\nNote: {total_count - len(processed_indices)} songs remaining. Run script again to continue.")
     else:
-        print("\nAll songs processed! You can delete '{CHECKPOINT_FILE}' to start fresh.")
-    print(f"Song data saved to {SONGS_DATA_CSV}")
+        print(f"\nAll songs processed! You can delete '{CHECKPOINT_FILE}' to start fresh.")
+    print(f"Song data saved to {UNIFIED_CSV}")
 
 
 if __name__ == "__main__":

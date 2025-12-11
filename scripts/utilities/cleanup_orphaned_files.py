@@ -1,5 +1,5 @@
 """
-Cleanup orphaned MP3 files that don't have entries in songs_data_with_genre.csv
+Cleanup orphaned MP3 files that don't have entries in unified songs.csv
 """
 import os
 import csv
@@ -12,7 +12,10 @@ os.chdir(project_root)
 sys.path.insert(0, str(project_root))
 
 AUDIO_FOLDER = "audio_files"
-CSV_FILE = os.path.join("data", "songs_data_with_genre.csv")
+# Try unified CSV first, then legacy
+CSV_FILE = os.path.join("data", "songs.csv")
+if not os.path.exists(CSV_FILE):
+    CSV_FILE = os.path.join("data", "songs_data_with_genre.csv")
 
 def cleanup_orphaned_files(auto_confirm=False):
     """Remove MP3 files that aren't in the CSV"""

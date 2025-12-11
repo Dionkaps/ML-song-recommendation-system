@@ -13,6 +13,7 @@ from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from multiprocessing import cpu_count
 from pydub import AudioSegment
+from tqdm import tqdm
 
 
 TARGET_DURATION_MS = 29 * 1000  # 29 seconds in milliseconds
@@ -111,7 +112,6 @@ def normalize_audio_files(audio_dir: str, verbose: bool = True, max_workers: int
         print("-" * 60)
     
     # Process files in parallel
-    completed = 0
     with ProcessPoolExecutor(max_workers=max_workers) as executor:
         # Submit all tasks
         future_to_file = {
@@ -119,33 +119,28 @@ def normalize_audio_files(audio_dir: str, verbose: bool = True, max_workers: int
             for mp3_file in mp3_files
         }
         
-        # Process results as they complete
-        for future in as_completed(future_to_file):
-            completed += 1
+        # Process results as they complete with progress bar
+        pbar = tqdm(as_completed(future_to_file), total=len(future_to_file),
+                    desc="Normalizing audio", unit="file")
+        for future in pbar:
             result = future.result()
             
             if result['action'] == 'removed':
                 stats['removed'] += 1
                 stats['removed_files'].append((result['file'], result['original_duration']))
-                if verbose:
-                    print(f"[{completed}/{stats['total']}] REMOVED (too short: {result['original_duration']:.2f}s): {result['file']}")
                     
             elif result['action'] == 'cropped':
                 stats['cropped'] += 1
                 stats['cropped_files'].append((result['file'], result['original_duration']))
-                if verbose:
-                    print(f"[{completed}/{stats['total']}] CROPPED ({result['original_duration']:.2f}s -> 29.00s): {result['file']}")
                     
             elif result['action'] == 'unchanged':
                 stats['unchanged'] += 1
-                if verbose:
-                    print(f"[{completed}/{stats['total']}] OK (exactly 29s): {result['file']}")
                     
             elif result['action'] == 'error':
                 stats['errors'] += 1
                 stats['error_files'].append((result['file'], result['error']))
-                if verbose:
-                    print(f"[{completed}/{stats['total']}] ERROR: {result['file']} - {result['error']}")
+            
+            pbar.set_postfix(removed=stats['removed'], cropped=stats['cropped'], ok=stats['unchanged'])
     
     # Print summary
     if verbose:

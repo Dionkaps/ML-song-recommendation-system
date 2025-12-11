@@ -3,6 +3,8 @@ import os
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import multiprocessing
 
 import numpy as np
 import pandas as pd
@@ -10,6 +12,8 @@ from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
 from sklearn.metrics import silhouette_score
 from sklearn.preprocessing import StandardScaler
+from tqdm import tqdm
+from joblib import Parallel, delayed
 
 # Add parent directories to path for imports
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
@@ -23,6 +27,7 @@ def build_group_weights(
     n_mels: int = fv.n_mels,
     n_genres: int = fv.n_genres,
     include_genre: bool = fv.include_genre,
+    include_msd: bool = fv.include_msd_features,
     group_multipliers: Optional[List[float]] = None,
 ) -> np.ndarray:
     """
@@ -30,20 +35,64 @@ def build_group_weights(
     
     Args:
         n_mfcc: Number of MFCC coefficients
-        n_mels: Number of mel bands
+        n_mels: Number of mel bands (kept for compatibility, not used)
         n_genres: Number of genre categories
         include_genre: Whether to include genre as a feature
+        include_msd: Whether to include MSD metadata features (key, mode, loudness, tempo)
         group_multipliers: List of multipliers for each feature group.
                           If None, uses fv.feature_group_weights from config.
-                          Order: [MFCC, MelSpec, SpectralCentroid, SpectralFlatness, ZCR, Genre]
+                          Order: [MFCC, ΔMFCC, ΔΔMFCC, SpectralCentroid, SpectralRolloff, 
+                                  SpectralFlux, SpectralFlatness, ZCR, Chroma, BeatStrength,
+                                  Key, Mode, Loudness, Tempo, Genre]
     
     Returns:
         Weight array matching the concatenated feature vector dimensions
+    
+    Feature dimensions (mean + std for time-varying features):
+        - MFCC: 2 * n_mfcc (e.g., 26 for n_mfcc=13)
+        - ΔMFCC: 2 * n_mfcc
+        - ΔΔMFCC: 2 * n_mfcc
+        - Spectral Centroid: 2 (1-dim feature, mean + std)
+        - Spectral Rolloff: 2
+        - Spectral Flux: 2
+        - Spectral Flatness: 2
+        - ZCR: 2
+        - Chroma: 24 (12-dim feature, mean + std)
+        - Beat Strength: 4 (tempo, mean_onset, std_onset, onset_rate - no mean/std)
+        - Key: 12 (one-hot encoded)
+        - Mode: 2 (one-hot encoded: major/minor)
+        - Loudness: 1 (scalar)
+        - Tempo (MSD): 1 (scalar)
+        - Genre: n_genres (one-hot encoded)
     """
+    n_chroma = 12
+    
+    # Base audio features
+    group_sizes = [
+        2 * n_mfcc,     # MFCC
+        2 * n_mfcc,     # ΔMFCC
+        2 * n_mfcc,     # ΔΔMFCC
+        2,              # Spectral Centroid
+        2,              # Spectral Rolloff
+        2,              # Spectral Flux
+        2,              # Spectral Flatness
+        2,              # ZCR
+        2 * n_chroma,   # Chroma (24 dims)
+        4,              # Beat Strength (4 scalar values)
+    ]
+    
+    # Add MSD features if enabled
+    if include_msd:
+        group_sizes.extend([
+            12,             # Key (one-hot)
+            2,              # Mode (one-hot)
+            1,              # Loudness
+            1,              # Tempo (MSD)
+        ])
+    
+    # Add genre if enabled
     if include_genre:
-        group_sizes = [2 * n_mfcc, 2 * n_mels, 2, 2, 2, n_genres]
-    else:
-        group_sizes = [2 * n_mfcc, 2 * n_mels, 2, 2, 2]
+        group_sizes.append(n_genres)  # Genre
     
     # Use global config if no multipliers provided
     if group_multipliers is None:
@@ -71,6 +120,7 @@ def equalize_features_pca(
     n_mels: int = fv.n_mels,
     n_genres: int = fv.n_genres,
     include_genre: bool = fv.include_genre,
+    include_msd: bool = fv.include_msd_features,
     pca_components: int = fv.pca_components_per_group,
 ) -> np.ndarray:
     """
@@ -88,21 +138,65 @@ def equalize_features_pca(
     Args:
         X_all: Raw feature matrix [n_samples, n_features]
         n_mfcc: Number of MFCC coefficients
-        n_mels: Number of mel bands
+        n_mels: Number of mel bands (kept for compatibility, not used)
         n_genres: Number of genre categories
         include_genre: Whether genre features are included
+        include_msd: Whether MSD features (key, mode, loudness, tempo) are included
         pca_components: Number of PCA components per group (target dimensions)
     
     Returns:
         Equalized feature matrix [n_samples, n_groups * pca_components]
+    
+    Feature groups (AUDIO):
+        1. MFCC (2 * n_mfcc dims)
+        2. ΔMFCC (2 * n_mfcc dims)
+        3. ΔΔMFCC (2 * n_mfcc dims)
+        4. Spectral Centroid (2 dims)
+        5. Spectral Rolloff (2 dims)
+        6. Spectral Flux (2 dims)
+        7. Spectral Flatness (2 dims)
+        8. ZCR (2 dims)
+        9. Chroma (24 dims)
+        10. Beat Strength (4 dims)
+    
+    Feature groups (MSD, optional):
+        11. Key (12 dims one-hot)
+        12. Mode (2 dims one-hot)
+        13. Loudness (1 dim)
+        14. Tempo MSD (1 dim)
+    
+    Feature groups (optional):
+        15. Genre (n_genres dims)
     """
-    # Define group boundaries
+    n_chroma = 12
+    
+    # Define group boundaries - base audio features
+    group_sizes = [
+        2 * n_mfcc,     # MFCC
+        2 * n_mfcc,     # ΔMFCC
+        2 * n_mfcc,     # ΔΔMFCC
+        2,              # Spectral Centroid
+        2,              # Spectral Rolloff
+        2,              # Spectral Flux
+        2,              # Spectral Flatness
+        2,              # ZCR
+        2 * n_chroma,   # Chroma
+        4,              # Beat Strength
+    ]
+    group_names = [
+        "MFCC", "ΔMFCC", "ΔΔMFCC", "SpectralCentroid", "SpectralRolloff",
+        "SpectralFlux", "SpectralFlatness", "ZCR", "Chroma", "BeatStrength"
+    ]
+    
+    # Add MSD feature groups if enabled
+    if include_msd:
+        group_sizes.extend([12, 2, 1, 1])  # Key, Mode, Loudness, Tempo
+        group_names.extend(["Key", "Mode", "Loudness", "MSD_Tempo"])
+    
+    # Add genre if enabled
     if include_genre:
-        group_sizes = [2 * n_mfcc, 2 * n_mels, 2, 2, 2, n_genres]
-        group_names = ["MFCC", "MelSpec", "SpectralCentroid", "SpectralFlatness", "ZCR", "Genre"]
-    else:
-        group_sizes = [2 * n_mfcc, 2 * n_mels, 2, 2, 2]
-        group_names = ["MFCC", "MelSpec", "SpectralCentroid", "SpectralFlatness", "ZCR"]
+        group_sizes.append(n_genres)
+        group_names.append("Genre")
     
     # Validate input dimensions match expected
     expected_dims = sum(group_sizes)
@@ -110,7 +204,7 @@ def equalize_features_pca(
         raise ValueError(
             f"Feature dimension mismatch: got {X_all.shape[1]} features, "
             f"expected {expected_dims} (group_sizes={group_sizes}). "
-            f"Check n_mfcc={n_mfcc}, n_mels={n_mels}, n_genres={n_genres}, include_genre={include_genre}"
+            f"Check n_mfcc={n_mfcc}, n_genres={n_genres}, include_genre={include_genre}"
         )
     
     # Compute group start indices
@@ -175,6 +269,7 @@ def prepare_features(
     n_mels: int = fv.n_mels,
     n_genres: int = fv.n_genres,
     include_genre: bool = fv.include_genre,
+    include_msd: bool = fv.include_msd_features,
     equalization_method: Optional[str] = None,
     pca_components: Optional[int] = None,
 ) -> np.ndarray:
@@ -185,6 +280,7 @@ def prepare_features(
         X_all: Raw feature matrix
         n_mfcc, n_mels, n_genres: Feature dimensions
         include_genre: Whether genre is included
+        include_msd: Whether MSD features are included
         equalization_method: Override config method ("pca_per_group" or "weighted")
         pca_components: Override config PCA components per group
     
@@ -198,13 +294,13 @@ def prepare_features(
     
     if method == "pca_per_group":
         return equalize_features_pca(
-            X_all, n_mfcc, n_mels, n_genres, include_genre, pca_comp
+            X_all, n_mfcc, n_mels, n_genres, include_genre, include_msd, pca_comp
         )
     else:
         # Legacy weighted method
         scaler = StandardScaler()
         X_scaled = scaler.fit_transform(X_all)
-        weights = build_group_weights(n_mfcc, n_mels, n_genres, include_genre)
+        weights = build_group_weights(n_mfcc, n_mels, n_genres, include_genre, include_msd)
         if X_scaled.shape[1] != len(weights):
             raise ValueError(
                 f"Expected {len(weights)} dims after feature concat, got {X_scaled.shape[1]}"
@@ -218,20 +314,24 @@ def _load_genre_mapping(
     include_genre: bool,
 ) -> Tuple[Dict[str, str], List[str]]:
     """
-    Load genre mapping from songs_data_with_genre.csv or fallback to directory structure.
+    Load genre mapping from unified songs.csv or fallback to legacy methods.
     
-    NOTE: When using songs_data_with_genre.csv, songs have MULTIPLE genres (multi-label).
+    NOTE: When using songs.csv, songs have MULTIPLE genres (multi-label).
     For clustering purposes, we use the PRIMARY genre (first listed) to maintain
     compatibility with single-label clustering algorithms.
     """
     genre_map_path = os.path.join(results_dir, "genre_map.npy")
     genre_list_path = os.path.join(results_dir, "genre_list.npy")
 
-    # Try loading from songs_data_with_genre.csv first
-    csv_path = os.path.join("data", "songs_data_with_genre.csv")
-    if os.path.exists(csv_path) and include_genre:
-        print(f"Loading genre mapping from {csv_path}...")
-        multi_label_mapping = genre_mapper.load_genre_mapping(csv_path)
+    # Try loading from unified songs.csv first, then fallback to legacy
+    csv_path = os.path.join("data", "songs.csv")
+    legacy_csv_path = os.path.join("data", "songs_data_with_genre.csv")
+    
+    active_csv = csv_path if os.path.exists(csv_path) else (legacy_csv_path if os.path.exists(legacy_csv_path) else None)
+    
+    if active_csv and include_genre:
+        print(f"Loading genre mapping from {active_csv}...")
+        multi_label_mapping = genre_mapper.load_genre_mapping(active_csv)
         
         # Convert to single-label using PRIMARY genre (first one listed)
         # NOTE: This is intentional for clustering - we use the most prominent genre
@@ -280,9 +380,54 @@ def _collect_feature_vectors(
     genre_map: Dict[str, str],
     unique_genres: List[str],
     include_genre: bool,
+    include_msd: bool = True,
+    songs_csv_path: Optional[str] = None,
 ) -> Tuple[List[str], List[np.ndarray], List[str]]:
-    """Assemble feature vectors for each track."""
+    """Assemble feature vectors for each track.
+    
+    Loads the following features for each track:
+    - MFCC, ΔMFCC, ΔΔMFCC (timbre features)
+    - Spectral centroid, rolloff, flux, flatness (spectral features)
+    - Zero Crossing Rate (ZCR)
+    - Chroma (12-dim pitch class profile)
+    - Beat strength / onset rate
+    
+    If include_msd=True, also adds MSD metadata features:
+    - Key (12-dim one-hot encoded)
+    - Mode (2-dim one-hot: major/minor)
+    - Loudness (1-dim, normalized)
+    - Tempo (1-dim, normalized)
+    
+    Each time-varying feature is summarized as mean + std.
+    Beat strength features are single values (no mean/std needed).
+    """
+    import pandas as pd
+    
     genre_to_idx = {genre: idx for idx, genre in enumerate(unique_genres)}
+    
+    # Load MSD features from songs.csv if needed
+    msd_features_map = {}
+    if include_msd and songs_csv_path and os.path.exists(songs_csv_path):
+        try:
+            songs_df = pd.read_csv(songs_csv_path)
+            # Create mapping from filename (without extension) to MSD features
+            for _, row in songs_df.iterrows():
+                if pd.notna(row.get('filename')) and pd.notna(row.get('key')):
+                    # Strip .mp3 extension to match base names
+                    base_name = str(row['filename']).replace('.mp3', '')
+                    msd_features_map[base_name] = {
+                        'key': int(row['key']) if pd.notna(row['key']) else 0,
+                        'mode': int(row['mode']) if pd.notna(row['mode']) else 0,
+                        'loudness': float(row['loudness']) if pd.notna(row['loudness']) else -10.0,
+                        'tempo': float(row['tempo']) if pd.notna(row['tempo']) else 120.0,
+                    }
+            print(f"Loaded MSD features for {len(msd_features_map)} songs from {songs_csv_path}")
+        except Exception as e:
+            print(f"Warning: Could not load MSD features from {songs_csv_path}: {e}")
+            include_msd = False
+    elif include_msd:
+        print("Warning: No songs_csv_path provided or file not found. MSD features will not be included.")
+        include_msd = False
 
     feature_files = glob.glob(os.path.join(results_dir, "*_mfcc.npy"))
     base_names = [os.path.basename(f).replace("_mfcc.npy", "") for f in feature_files]
@@ -290,11 +435,46 @@ def _collect_feature_vectors(
     file_names: List[str] = []
     feature_vectors: List[np.ndarray] = []
     genres: List[str] = []
+    
+    # Collect loudness and tempo values for normalization
+    loudness_values = []
+    tempo_values = []
+    if include_msd:
+        for base in base_names:
+            if base in msd_features_map:
+                loudness_values.append(msd_features_map[base]['loudness'])
+                tempo_values.append(msd_features_map[base]['tempo'])
+        
+        # Compute normalization stats
+        if loudness_values and tempo_values:
+            loudness_mean, loudness_std = np.mean(loudness_values), np.std(loudness_values)
+            tempo_mean, tempo_std = np.mean(tempo_values), np.std(tempo_values)
+            if loudness_std < 1e-6:
+                loudness_std = 1.0
+            if tempo_std < 1e-6:
+                tempo_std = 1.0
+        else:
+            loudness_mean, loudness_std = -10.0, 5.0
+            tempo_mean, tempo_std = 120.0, 30.0
+    
+    # Define feature keys - must match what extract_features.py produces
+    feature_keys = [
+        "mfcc",
+        "delta_mfcc",
+        "delta2_mfcc",
+        "spectral_centroid",
+        "spectral_rolloff",
+        "spectral_flux",
+        "spectral_flatness",
+        "zero_crossing_rate",
+        "chroma",
+        "beat_strength",
+    ]
 
-    for base in base_names:
+    for base in tqdm(base_names, desc="Loading features", unit="song"):
         feats = {
             key: os.path.join(results_dir, f"{base}_{key}.npy")
-            for key in ["mfcc", "melspectrogram", "spectral_centroid", "spectral_flatness", "zero_crossing_rate"]
+            for key in feature_keys
         }
         if not all(os.path.isfile(path) for path in feats.values()):
             continue
@@ -306,15 +486,58 @@ def _collect_feature_vectors(
             if parts and parts[0] in genre_to_idx:
                 genre = parts[0]
             else:
-                print(f"Warning: Could not determine genre for {base}, skipping")
+                # Skip silently to avoid spamming progress bar
                 continue
         genres.append(genre)
 
-        arrays = [np.load(path) for path in feats.values()]
-        vec = np.concatenate([
-            np.concatenate([arr.mean(axis=1), arr.std(axis=1)])
-            for arr in arrays
-        ])
+        # Load and process audio features
+        feature_parts = []
+        for key in feature_keys:
+            arr = np.load(feats[key])
+            if key == "beat_strength":
+                # Beat strength is [4, 1] - flatten it directly
+                feature_parts.append(arr.flatten())
+            else:
+                # Time-varying features: compute mean and std across time axis
+                feature_parts.append(np.concatenate([arr.mean(axis=1), arr.std(axis=1)]))
+        
+        vec = np.concatenate(feature_parts)
+        
+        # Add MSD features if enabled
+        if include_msd:
+            if base in msd_features_map:
+                msd_data = msd_features_map[base]
+                
+                # Key: one-hot encode (12 dimensions, keys 0-11)
+                key_vec = np.zeros(12, dtype=float)
+                key_idx = msd_data['key'] % 12  # Ensure valid range
+                key_vec[key_idx] = 1.0
+                
+                # Mode: one-hot encode (2 dimensions: 0=minor, 1=major)
+                mode_vec = np.zeros(2, dtype=float)
+                mode_idx = msd_data['mode'] % 2  # Ensure valid range
+                mode_vec[mode_idx] = 1.0
+                
+                # Loudness: normalize
+                loudness_normalized = (msd_data['loudness'] - loudness_mean) / loudness_std
+                
+                # Tempo: normalize
+                tempo_normalized = (msd_data['tempo'] - tempo_mean) / tempo_std
+                
+                msd_vec = np.concatenate([
+                    key_vec,           # 12 dims
+                    mode_vec,          # 2 dims
+                    [loudness_normalized],  # 1 dim
+                    [tempo_normalized],     # 1 dim
+                ])
+            else:
+                # Default MSD features for songs not in CSV
+                msd_vec = np.zeros(16, dtype=float)  # 12 + 2 + 1 + 1
+                msd_vec[0] = 1.0  # Default key = 0 (C)
+                msd_vec[12] = 1.0  # Default mode = 0 (minor)
+                # Loudness and tempo remain at 0 (mean after normalization)
+            
+            vec = np.concatenate([vec, msd_vec])
 
         if include_genre:
             genre_vec = np.zeros(len(unique_genres), dtype=float)
@@ -363,26 +586,26 @@ def _select_optimal_k_bic(
     X: np.ndarray,
     k_min: int,
     k_max: int,
+    n_jobs: int = -1,
 ) -> Tuple[int, Optional[np.ndarray], Optional[np.ndarray], List[float]]:
     """
     Pick the number of clusters using BIC (consistent with GMM/VaDE).
     
     Uses a GMM with spherical covariance to approximate K-Means BIC.
     This provides consistency with GMM's selection criterion.
+    Uses parallel processing for faster computation.
+    
+    Args:
+        X: Feature matrix
+        k_min: Minimum number of clusters
+        k_max: Maximum number of clusters  
+        n_jobs: Number of parallel jobs (-1 = all cores)
     """
     from sklearn.mixture import GaussianMixture
     
-    best_k = k_min
-    best_labels: Optional[np.ndarray] = None
-    best_centers: Optional[np.ndarray] = None
-    best_bic = float('inf')
-    bic_scores: List[float] = []
-    
-    print(f"Searching for optimal k using BIC ({k_min}-{k_max})...")
-    
-    for k in range(k_min, k_max + 1):
+    def evaluate_k(k: int) -> Tuple[int, float, bool]:
+        """Evaluate BIC for a single k value."""
         try:
-            # Use GMM with spherical covariance (equivalent to K-Means assumption)
             gmm = GaussianMixture(
                 n_components=k,
                 covariance_type='spherical',
@@ -392,29 +615,38 @@ def _select_optimal_k_bic(
             )
             gmm.fit(X)
             bic = gmm.bic(X)
-            bic_scores.append(bic)
-            
-            if not gmm.converged_:
-                print(f"  K={k}: BIC={bic:.2f} (did not converge)")
-                continue
-            
-            print(f"  K={k}: BIC={bic:.2f}")
-            
-            if bic < best_bic:
-                best_bic = bic
-                best_k = k
-                # Get K-Means solution for this k
-                estimator = KMeans(n_clusters=k, random_state=42, n_init=10)
-                best_labels = estimator.fit_predict(X)
-                best_centers = estimator.cluster_centers_
-                
-        except Exception as e:
-            print(f"  K={k}: Failed ({str(e)[:50]}...)")
-            bic_scores.append(float('inf'))
-            continue
+            return k, bic, gmm.converged_
+        except Exception:
+            return k, float('inf'), False
     
-    if best_labels is not None:
+    print(f"Searching for optimal k using BIC ({k_min}-{k_max}) with parallel processing...")
+    
+    # Parallel evaluation of all k values
+    k_values = list(range(k_min, k_max + 1))
+    results = Parallel(n_jobs=n_jobs, verbose=1)(
+        delayed(evaluate_k)(k) for k in k_values
+    )
+    
+    # Process results
+    best_k = k_min
+    best_bic = float('inf')
+    bic_scores: List[float] = []
+    
+    for k, bic, converged in sorted(results, key=lambda x: x[0]):
+        bic_scores.append(bic)
+        if converged and bic < best_bic:
+            best_bic = bic
+            best_k = k
+    
+    # Now fit the final K-Means model with the best k
+    best_labels: Optional[np.ndarray] = None
+    best_centers: Optional[np.ndarray] = None
+    
+    if best_bic < float('inf'):
         print(f"Optimal k (BIC) -> {best_k} (BIC={best_bic:.2f})")
+        estimator = KMeans(n_clusters=best_k, random_state=42, n_init=10)
+        best_labels = estimator.fit_predict(X)
+        best_centers = estimator.cluster_centers_
     else:
         print("BIC-based search failed, using fallback")
     
@@ -431,12 +663,18 @@ def run_kmeans_clustering(
     n_mfcc: int = fv.n_mfcc,
     n_mels: int = fv.n_mels,
     include_genre: bool = fv.include_genre,
+    include_msd: bool = fv.include_msd_features,
+    songs_csv_path: Optional[str] = None,
 ):
     os.makedirs(results_dir, exist_ok=True)
+    
+    # Auto-detect songs.csv path if not provided
+    if songs_csv_path is None:
+        songs_csv_path = "data/songs.csv"
 
     genre_map, unique_genres = _load_genre_mapping(audio_dir, results_dir, include_genre)
     file_names, feature_vectors, genres = _collect_feature_vectors(
-        results_dir, genre_map, unique_genres, include_genre
+        results_dir, genre_map, unique_genres, include_genre, include_msd, songs_csv_path
     )
 
     if not feature_vectors:
@@ -451,6 +689,7 @@ def run_kmeans_clustering(
         n_mels=n_mels,
         n_genres=len(unique_genres),
         include_genre=include_genre,
+        include_msd=include_msd,
     )
 
     labels: Optional[np.ndarray] = None

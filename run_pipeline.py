@@ -68,7 +68,7 @@ def main():
         print("\n📥 Downloading songs from Deezer...")
         print("   - Only songs WITH genres will be downloaded")
         print("   - Failed downloads will be cleaned up automatically")
-        print("   - Results saved to: songs_data_with_genre.csv")
+        print("   - Results saved to unified: data/songs.csv")
         print("   - Audio files saved to: audio_files/")
         print()
         
@@ -79,20 +79,24 @@ def main():
         print("Validating download results...")
         print("="*60)
         
-        csv_path = here / "data" / "songs_data_with_genre.csv"
+        # Check unified CSV (primary) or legacy CSV
+        csv_path = here / "data" / "songs.csv"
+        legacy_csv_path = here / "data" / "songs_data_with_genre.csv"
         audio_dir = here / "audio_files"
         
-        if not csv_path.exists():
-            print("⚠️  WARNING: songs_data_with_genre.csv was not created!")
+        active_csv = csv_path if csv_path.exists() else legacy_csv_path
+        
+        if not active_csv.exists():
+            print("⚠️  WARNING: songs.csv was not created!")
             print("   Download may have failed. Please check the logs above.")
         else:
             # Count CSV entries
             import csv as csv_module
             csv_count = 0
             try:
-                with open(csv_path, 'r', encoding='utf-8') as f:
+                with open(active_csv, 'r', encoding='utf-8') as f:
                     csv_count = sum(1 for _ in csv_module.DictReader(f))
-                print(f"✓ CSV created: {csv_count} songs with genres")
+                print(f"✓ CSV created: {csv_count} songs in {active_csv.name}")
             except Exception as e:
                 print(f"⚠️  Error reading CSV: {e}")
         

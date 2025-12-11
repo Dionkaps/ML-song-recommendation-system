@@ -6,6 +6,7 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
+from tqdm import tqdm
 
 import torch
 import torch.nn as nn
@@ -34,6 +35,8 @@ from src.clustering.kmeans import (  # noqa: E402
 # -----------------------------------------------------------------------------
 # Utility
 # -----------------------------------------------------------------------------
+from joblib import Parallel, delayed
+
 
 def set_seed(seed: int = 42):
     import random
@@ -47,6 +50,7 @@ def _select_optimal_components_bic(
     X: np.ndarray,
     min_components: int = 2,
     max_components: int = 15,
+    n_jobs: int = -1,
 ) -> Tuple[int, List[float]]:
     """
     Select optimal number of components using BIC on a GMM fit.
@@ -55,10 +59,13 @@ def _select_optimal_components_bic(
     after pretraining, not on the input features. Use 
     _select_optimal_components_latent() instead when a pretrained model is available.
     
+    Uses parallel processing for faster computation.
+    
     Args:
         X: Feature matrix (n_samples, n_features)
         min_components: Minimum number of components to try
         max_components: Maximum number of components to try
+        n_jobs: Number of parallel jobs (-1 = all cores)
         
     Returns:
         Tuple of (optimal_n_components, list_of_bic_scores)
@@ -70,13 +77,8 @@ def _select_optimal_components_bic(
         print(f"  Capping max components from {max_components} to {max_sensible} (based on data size)")
         max_components = max_sensible
     
-    best_n = min_components
-    best_bic = float('inf')
-    bic_scores: List[float] = []
-    
-    print(f"Searching for optimal number of components ({min_components}-{max_components})...")
-    
-    for n in range(min_components, max_components + 1):
+    def evaluate_n(n: int) -> Tuple[int, float, bool]:
+        """Evaluate BIC for a single n value."""
         try:
             gmm = GaussianMixture(
                 n_components=n,
@@ -87,22 +89,28 @@ def _select_optimal_components_bic(
             )
             gmm.fit(X)
             bic = gmm.bic(X)
-            bic_scores.append(bic)
-            
-            if not gmm.converged_:
-                print(f"  n={n}: BIC={bic:.2f} (did not converge)")
-                continue
-                
-            print(f"  n={n}: BIC={bic:.2f}")
-            
-            if bic < best_bic:
-                best_bic = bic
-                best_n = n
-                
-        except Exception as e:
-            print(f"  n={n}: Failed ({str(e)[:50]}...)")
-            bic_scores.append(float('inf'))
-            continue
+            return n, bic, gmm.converged_
+        except Exception:
+            return n, float('inf'), False
+    
+    print(f"Searching for optimal number of components ({min_components}-{max_components}) with parallel processing...")
+    
+    # Parallel evaluation
+    n_values = list(range(min_components, max_components + 1))
+    results = Parallel(n_jobs=n_jobs, verbose=1)(
+        delayed(evaluate_n)(n) for n in n_values
+    )
+    
+    # Process results
+    best_n = min_components
+    best_bic = float('inf')
+    bic_scores: List[float] = []
+    
+    for n, bic, converged in sorted(results, key=lambda x: x[0]):
+        bic_scores.append(bic)
+        if converged and bic < best_bic:
+            best_bic = bic
+            best_n = n
     
     print(f"Optimal components (BIC) -> {best_n} (BIC={best_bic:.2f})")
     return best_n, bic_scores
@@ -341,7 +349,8 @@ class TrainConfig:
 def pretrain_autoencoder(model: VaDE, loader: DataLoader, device: torch.device, cfg: TrainConfig):
     model.train()
     opt = torch.optim.Adam(list(model.encoder.parameters()) + list(model.decoder.parameters()), lr=cfg.lr, weight_decay=cfg.weight_decay)
-    for epoch in range(cfg.pretrain_epochs):
+    pbar = tqdm(range(cfg.pretrain_epochs), desc="Pretraining autoencoder", unit="epoch")
+    for epoch in pbar:
         epoch_loss = 0.0
         for (x_batch,) in loader:
             x_batch = x_batch.to(device)
@@ -354,8 +363,7 @@ def pretrain_autoencoder(model: VaDE, loader: DataLoader, device: torch.device, 
             opt.step()
             epoch_loss += loss.item() * x_batch.size(0)
         epoch_loss /= len(loader.dataset)
-        if (epoch + 1) % 5 == 0 or epoch == 0:
-            print(f"[Pretrain] Epoch {epoch+1}/{cfg.pretrain_epochs} - MSE: {epoch_loss:.4f}")
+        pbar.set_postfix(MSE=f"{epoch_loss:.4f}")
 
 
 def init_gmm_prior(model: VaDE, X: np.ndarray, cfg: TrainConfig):
@@ -397,7 +405,8 @@ def train_vade(model: VaDE, loader: DataLoader, cfg: TrainConfig):
     model.train()
     opt = torch.optim.Adam(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 
-    for epoch in range(cfg.train_epochs):
+    pbar = tqdm(range(cfg.train_epochs), desc="Training VaDE", unit="epoch")
+    for epoch in pbar:
         # KL annealing: gradually increase KL weight to prevent posterior collapse
         if cfg.kl_warmup_epochs > 0:
             kl_weight = min(1.0, (epoch + 1) / cfg.kl_warmup_epochs)
@@ -425,14 +434,11 @@ def train_vade(model: VaDE, loader: DataLoader, cfg: TrainConfig):
             running["kl_c"] += stats["kl_c"] * bsz
             n += bsz
 
-        if (epoch + 1) % 5 == 0 or epoch == 0:
-            print(
-                f"[Train] Epoch {epoch+1}/{cfg.train_epochs} - "
-                f"Loss: {running['loss']/n:.4f} | "
-                f"Recon: {running['recon']/n:.4f} | "
-                f"KLz: {running['kl_z']/n:.4f} | "
-                f"KLc: {running['kl_c']/n:.4f}"
-            )
+        pbar.set_postfix(
+            Loss=f"{running['loss']/n:.4f}",
+            Recon=f"{running['recon']/n:.4f}",
+            KLz=f"{running['kl_z']/n:.4f}"
+        )
 
 
 # -----------------------------------------------------------------------------
@@ -458,6 +464,8 @@ def run_vade_clustering(
     n_mfcc: int = fv.n_mfcc,
     n_mels: int = fv.n_mels,
     include_genre: bool = fv.include_genre,
+    include_msd: bool = fv.include_msd_features,
+    songs_csv_path: Optional[str] = None,
 ):
     """
     Run VaDE (Variational Deep Embedding) clustering on audio features.
@@ -485,19 +493,25 @@ def run_vade_clustering(
         n_mfcc: Number of MFCC coefficients used in features
         n_mels: Number of mel bands used in features
         include_genre: Whether genre one-hot encoding is included in features
+        include_msd: Whether to include MSD metadata features (key, mode, loudness, tempo)
+        songs_csv_path: Path to songs.csv containing MSD features
     
     Returns:
         Tuple of (DataFrame with results, 2D coordinates, cluster labels)
     """
     os.makedirs(results_dir, exist_ok=True)
     set_seed(42)
+    
+    # Auto-detect songs.csv path if not provided
+    if songs_csv_path is None:
+        songs_csv_path = "data/songs.csv"
 
     # -------------------------
     # Assemble feature matrix X
     # -------------------------
     genre_map, unique_genres = _load_genre_mapping(audio_dir, results_dir, include_genre)
     file_names, feature_vectors, genres = _collect_feature_vectors(
-        results_dir, genre_map, unique_genres, include_genre
+        results_dir, genre_map, unique_genres, include_genre, include_msd, songs_csv_path
     )
 
     if not feature_vectors:
@@ -512,6 +526,7 @@ def run_vade_clustering(
         n_mels=n_mels,
         n_genres=len(unique_genres),
         include_genre=include_genre,
+        include_msd=include_msd,
     )
 
     # -------------------------

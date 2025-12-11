@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Test script to verify the pipeline flow:
-1. Check songs_data_with_genre.csv format
+1. Check unified songs.csv format
 2. Check audio files match CSV entries
 3. Check feature files match audio files
 4. Test genre mapping for clustering
@@ -25,7 +25,11 @@ def test_csv_structure():
     print("TEST 1: CSV Structure")
     print("="*60)
     
-    csv_path = os.path.join("data", "songs_data_with_genre.csv")
+    # Check unified CSV first, then fallback to legacy
+    csv_path = os.path.join("data", "songs.csv")
+    if not os.path.exists(csv_path):
+        csv_path = os.path.join("data", "songs_data_with_genre.csv")
+    
     if not os.path.exists(csv_path):
         print("❌ CSV file not found!")
         return None
@@ -35,19 +39,22 @@ def test_csv_structure():
         reader = csv.DictReader(f)
         rows = list(reader)
     
+    print(f"✓ Using CSV: {csv_path}")
     print(f"✓ Total CSV entries: {len(rows)}")
     print(f"✓ Columns: {', '.join(rows[0].keys())}")
     
     # Check for empty genres
-    empty_genres = sum(1 for r in rows if not r['genre'].strip())
+    empty_genres = sum(1 for r in rows if not r.get('genre', '').strip())
     print(f"✓ Entries with genres: {len(rows) - empty_genres}")
     print(f"✓ Entries without genres: {empty_genres}")
     
     # Sample entries
     print("\nSample entries:")
     for i, row in enumerate(rows[:3], 1):
-        genre_preview = row['genre'][:40] + "..." if len(row['genre']) > 40 else row['genre']
-        print(f"  {i}. {row['filename']}")
+        genre = row.get('genre', '')
+        genre_preview = genre[:40] + "..." if len(genre) > 40 else genre
+        filename = row.get('filename', 'N/A')
+        print(f"  {i}. {filename}")
         print(f"     Genre: {genre_preview}")
     
     return rows
@@ -128,8 +135,8 @@ def test_genre_mapping(csv_rows):
     # Simulate what kmeans.py does
     from src.utils import genre_mapper
     
-    # Load genre mapping
-    multi_label_mapping = genre_mapper.load_genre_mapping("songs_data_with_genre.csv")
+    # Load genre mapping (will use unified songs.csv by default)
+    multi_label_mapping = genre_mapper.load_genre_mapping()
     print(f"\n✓ Loaded multi-label mapping: {len(multi_label_mapping)} songs")
     
     # Check sample keys

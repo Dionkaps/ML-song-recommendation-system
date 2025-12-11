@@ -8,6 +8,7 @@ import pandas as pd
 from sklearn.decomposition import PCA
 from sklearn.mixture import GaussianMixture
 from sklearn.preprocessing import StandardScaler
+from tqdm import tqdm
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent.parent
@@ -23,6 +24,7 @@ from src.clustering.kmeans import (  # noqa: E402
     compute_cluster_range,
     prepare_features,
 )
+from joblib import Parallel, delayed
 
 
 def _select_components(
@@ -34,15 +36,15 @@ def _select_components(
     tol: float,
     init_params: str,
     reg_covar: float = 1e-6,
+    n_jobs: int = -1,
 ) -> Tuple[int, GaussianMixture, List[float], List[float]]:
-    """Pick the component count that minimises BIC (also tracks AIC)."""
-    best_n = min_components
-    best_model: Optional[GaussianMixture] = None
-    best_bic = float('inf')
-    bic_scores: List[float] = []
-    aic_scores: List[float] = []
-
-    for n in range(min_components, max_components + 1):
+    """Pick the component count that minimises BIC (also tracks AIC).
+    
+    Uses parallel processing to evaluate multiple component counts simultaneously.
+    """
+    
+    def evaluate_n(n: int) -> Tuple[int, float, float, bool, Optional[GaussianMixture]]:
+        """Evaluate BIC/AIC for a single n value."""
         try:
             model = GaussianMixture(
                 n_components=n,
@@ -56,26 +58,32 @@ def _select_components(
             model.fit(data)
             bic = model.bic(data)
             aic = model.aic(data)
-            bic_scores.append(bic)
-            aic_scores.append(aic)
-            
-            # Only accept model if it converged
-            if not model.converged_:
-                print(f"  GMM with {n} components did not converge, skipping...")
-                bic_scores.append(float('inf'))
-                aic_scores.append(float('inf'))
-                continue
-                
-            if bic < best_bic:
-                best_bic = bic
-                best_n = n
-                best_model = model
-        except ValueError as e:
-            # Handle ill-conditioned covariance matrices
-            print(f"  GMM with {n} components failed: {str(e)[:60]}...")
-            bic_scores.append(float('inf'))
-            aic_scores.append(float('inf'))
-            continue
+            return n, bic, aic, model.converged_, model
+        except ValueError:
+            return n, float('inf'), float('inf'), False, None
+    
+    print(f"Finding optimal GMM components ({min_components}-{max_components}) with parallel processing...")
+    
+    # Parallel evaluation of all component counts
+    n_values = list(range(min_components, max_components + 1))
+    results = Parallel(n_jobs=n_jobs, verbose=1)(
+        delayed(evaluate_n)(n) for n in n_values
+    )
+    
+    # Process results
+    best_n = min_components
+    best_model: Optional[GaussianMixture] = None
+    best_bic = float('inf')
+    bic_scores: List[float] = []
+    aic_scores: List[float] = []
+    
+    for n, bic, aic, converged, model in sorted(results, key=lambda x: x[0]):
+        bic_scores.append(bic)
+        aic_scores.append(aic)
+        if converged and bic < best_bic:
+            best_bic = bic
+            best_n = n
+            best_model = model
 
     if best_model is None:
         raise RuntimeError("Failed to fit any GaussianMixture models during selection.")
@@ -98,12 +106,18 @@ def run_gmm_clustering(
     n_mfcc: int = fv.n_mfcc,
     n_mels: int = fv.n_mels,
     include_genre: bool = fv.include_genre,
+    include_msd: bool = fv.include_msd_features,
+    songs_csv_path: Optional[str] = None,
 ):
     os.makedirs(results_dir, exist_ok=True)
+    
+    # Auto-detect songs.csv path if not provided
+    if songs_csv_path is None:
+        songs_csv_path = "data/songs.csv"
 
     genre_map, unique_genres = _load_genre_mapping(audio_dir, results_dir, include_genre)
     file_names, feature_vectors, genres = _collect_feature_vectors(
-        results_dir, genre_map, unique_genres, include_genre
+        results_dir, genre_map, unique_genres, include_genre, include_msd, songs_csv_path
     )
 
     if not feature_vectors:
@@ -118,6 +132,7 @@ def run_gmm_clustering(
         n_mels=n_mels,
         n_genres=len(unique_genres),
         include_genre=include_genre,
+        include_msd=include_msd,
     )
 
     model: Optional[GaussianMixture] = None

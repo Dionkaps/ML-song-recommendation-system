@@ -27,11 +27,16 @@ print("="*60)
 print("Checking Problem Songs")
 print("="*60)
 
-# Load CSV
-with open(os.path.join('data', 'songs_data_with_genre.csv'), 'r', encoding='utf-8') as f:
+# Load CSV (try unified first, then legacy)
+csv_path = os.path.join('data', 'songs.csv')
+if not os.path.exists(csv_path):
+    csv_path = os.path.join('data', 'songs_data_with_genre.csv')
+
+with open(csv_path, 'r', encoding='utf-8') as f:
     rows = list(csv.DictReader(f))
 
-print(f"\nTotal songs in CSV: {len(rows)}")
+print(f"\nUsing CSV: {csv_path}")
+print(f"Total songs in CSV: {len(rows)}")
 
 print("\n" + "="*60)
 print("Results:")
@@ -40,12 +45,13 @@ print("="*60)
 for song in problem_songs:
     print(f"\nSong: {song}")
     
-    # Check if in CSV (with .mp3 extension)
-    matches = [r for r in rows if song in r['filename']]
+    # Check if in CSV (with .mp3 extension) - filename column works for both unified and legacy CSV
+    matches = [r for r in rows if r.get('filename') and song in r['filename']]
     
     if matches:
         print(f"  [YES] Found in CSV: {matches[0]['filename']}")
-        print(f"        Genre: {matches[0]['genre'][:60]}...")
+        genre = matches[0].get('genre', 'N/A')
+        print(f"        Genre: {genre[:60] if genre else 'N/A'}...")
     else:
         print(f"  [NO]  NOT in CSV")
     
@@ -57,7 +63,7 @@ for song in problem_songs:
         print(f"  [NO]  Audio file MISSING")
     
     # Check if feature file exists
-    feature_path = f"output\\results\\{song}_mfcc.npy"
+    feature_path = f"output\\features\\{song}_mfcc.npy"
     if os.path.exists(feature_path):
         print(f"  [YES] Feature file EXISTS")
     else:

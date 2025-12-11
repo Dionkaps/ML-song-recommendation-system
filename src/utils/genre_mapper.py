@@ -1,6 +1,6 @@
 """
 Genre Mapper Utility
-Handles multi-label genre mapping from songs_data_with_genre.csv to audio files.
+Handles multi-label genre mapping from unified songs.csv to audio files.
 """
 
 import os
@@ -16,12 +16,16 @@ project_root = Path(__file__).resolve().parent.parent.parent
 os.chdir(project_root)
 sys.path.insert(0, str(project_root))
 
-def load_genre_mapping(csv_path: str) -> Dict[str, List[str]]:
+# Unified CSV path
+UNIFIED_CSV = os.path.join("data", "songs.csv")
+
+
+def load_genre_mapping(csv_path: str = None) -> Dict[str, List[str]]:
     """
-    Load genre mapping from songs_data_with_genre.csv.
+    Load genre mapping from unified songs.csv.
     
     Args:
-        csv_path: Path to songs_data_with_genre.csv
+        csv_path: Path to songs.csv (or legacy songs_data_with_genre.csv)
         
     Returns:
         Dictionary mapping filename to list of genres
@@ -29,9 +33,19 @@ def load_genre_mapping(csv_path: str) -> Dict[str, List[str]]:
     """
     genre_mapping = {}
     
+    # Use unified CSV by default
+    if csv_path is None:
+        csv_path = UNIFIED_CSV
+    
+    # Also check legacy path for backward compatibility
     if not os.path.exists(csv_path):
-        print(f"Warning: {csv_path} not found. Returning empty mapping.")
-        return genre_mapping
+        legacy_path = os.path.join("data", "songs_data_with_genre.csv")
+        if os.path.exists(legacy_path):
+            print(f"Note: Using legacy CSV at {legacy_path}")
+            csv_path = legacy_path
+        else:
+            print(f"Warning: {csv_path} not found. Returning empty mapping.")
+            return genre_mapping
     
     try:
         with open(csv_path, 'r', encoding='utf-8') as f:
@@ -45,7 +59,7 @@ def load_genre_mapping(csv_path: str) -> Dict[str, List[str]]:
                     genres = [g.strip() for g in genre_str.split(',') if g.strip()]
                     genre_mapping[filename] = genres
                     
-        print(f"✓ Loaded genre mapping for {len(genre_mapping)} songs")
+        print(f"✓ Loaded genre mapping for {len(genre_mapping)} songs from {csv_path}")
         
         # Print genre statistics
         all_genres = set()
@@ -170,15 +184,13 @@ def get_genre_statistics(genre_mapping: Dict[str, List[str]]) -> Dict:
 
 if __name__ == '__main__':
     # Example usage
-    csv_path = 'songs_data_with_genre.csv'
-    
     print("=" * 60)
     print("Genre Mapper Utility - Test")
     print("=" * 60)
     
-    # Load mapping
+    # Load mapping (will use unified songs.csv by default)
     print("\n1. Loading genre mapping...")
-    genre_mapping = load_genre_mapping(csv_path)
+    genre_mapping = load_genre_mapping()
     
     if genre_mapping:
         # Show sample
