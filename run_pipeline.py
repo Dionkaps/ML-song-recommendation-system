@@ -19,7 +19,7 @@ def main():
     parser.add_argument(
         "--skip",
         nargs="*",
-        choices=["download", "extract", "process", "plot", "cluster"],
+        choices=["download", "preprocess", "extract", "process", "plot", "cluster"],
         default=[],
         help="Names of steps to skip (space‑separated).",
     )
@@ -125,33 +125,204 @@ def main():
         print("Download step complete!")
         print("="*60 + "\n")
         
+    if "preprocess" not in args.skip:
         # Normalize audio files to exactly 29 seconds
         print("\n" + "="*60)
-        print("AUDIO NORMALIZATION: Standardizing to 29 seconds")
+        print("AUDIO PREPROCESSING: Cropping & Loudness Normalization")
         print("="*60)
         print("   - Removing songs shorter than 29 seconds")
         print("   - Cropping songs longer than 29 seconds")
+        print("   - Normalizing loudness to -14 LUFS (ITU-R BS.1770)")
+        print("   - Limiting True Peak to -1.0 dBTP")
+        print("   - Generating before/after CSV report")
         print()
         
-        from src.utils.audio_normalizer import normalize_audio_files
-        normalize_stats = normalize_audio_files(str(audio_dir))
+        import csv as csv_module
+        from tqdm import tqdm
+        import librosa
+        import pyloudnorm as pyln
+        import numpy as np
+        from src.audio_preprocessing.processor import AudioPreprocessor
+        
+        audio_dir = here / "audio_files"
+        csv_path = here / "data" / "songs.csv"
+        report_path = here / "output" / "preprocessing_report.csv"
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Step 1: Measure BEFORE preprocessing
+        print("📊 Step 1/3: Measuring original audio characteristics...")
+        audio_files = sorted(audio_dir.glob("*.mp3"))
+        before_measurements = {}
+        
+        meter = pyln.Meter(22050)  # Sample rate for measurement
+        
+        for audio_file in tqdm(audio_files, desc="Analyzing"):
+            try:
+                # Load audio
+                y, sr = librosa.load(str(audio_file), sr=22050, mono=True)
+                duration = len(y) / sr
+                
+                # Measure loudness
+                if len(y) > 0:
+                    loudness = meter.integrated_loudness(y)
+                    peak_db = 20 * np.log10(np.max(np.abs(y))) if np.max(np.abs(y)) > 0 else -np.inf
+                else:
+                    loudness = -np.inf
+                    peak_db = -np.inf
+                
+                before_measurements[audio_file.name] = {
+                    'duration': duration,
+                    'lufs': loudness,
+                    'peak_db': peak_db
+                }
+            except Exception as e:
+                before_measurements[audio_file.name] = {
+                    'duration': None,
+                    'lufs': None,
+                    'peak_db': None,
+                    'error': str(e)
+                }
+        
+        print(f"✅ Measured {len(before_measurements)} files")
+        
+        # Step 2: Run preprocessing
+        print("\n🔧 Step 2/3: Running preprocessing pipeline...")
+        processor = AudioPreprocessor(
+            target_duration=29.0,
+            target_lufs=-14.0,
+            max_true_peak=-1.0
+        )
+        
+        normalize_stats = processor.process_directory(str(audio_dir))
+        
+        # Step 3: Measure AFTER preprocessing and create report
+        print("\n📊 Step 3/3: Measuring processed audio and generating report...")
+        audio_files_after = sorted(audio_dir.glob("*.mp3"))
+        after_measurements = {}
+        
+        for audio_file in tqdm(audio_files_after, desc="Analyzing"):
+            try:
+                # Load audio
+                y, sr = librosa.load(str(audio_file), sr=22050, mono=True)
+                duration = len(y) / sr
+                
+                # Measure loudness
+                if len(y) > 0:
+                    loudness = meter.integrated_loudness(y)
+                    peak_db = 20 * np.log10(np.max(np.abs(y))) if np.max(np.abs(y)) > 0 else -np.inf
+                else:
+                    loudness = -np.inf
+                    peak_db = -np.inf
+                
+                after_measurements[audio_file.name] = {
+                    'duration': duration,
+                    'lufs': loudness,
+                    'peak_db': peak_db
+                }
+            except Exception as e:
+                after_measurements[audio_file.name] = {
+                    'duration': None,
+                    'lufs': None,
+                    'peak_db': None,
+                    'error': str(e)
+                }
+        
+        print(f"✅ Measured {len(after_measurements)} files")
+        
+        # Create CSV report
+        print("\n💾 Creating CSV report...")
+        with open(report_path, 'w', newline='', encoding='utf-8') as f:
+            writer = csv_module.writer(f)
+            writer.writerow([
+                'filename', 'status', 
+                'before_duration_s', 'after_duration_s', 'duration_change_s',
+                'before_lufs', 'after_lufs', 'lufs_change',
+                'before_peak_db', 'after_peak_db', 'peak_change_db',
+                'gain_applied_db', 'was_cropped', 'was_removed', 'error'
+            ])
+            
+            # Combine all filenames
+            all_files = set(before_measurements.keys()) | set(after_measurements.keys())
+            removed_files = set(normalize_stats.get('removed_files', []))
+            
+            for filename in sorted(all_files):
+                before = before_measurements.get(filename, {})
+                after = after_measurements.get(filename, {})
+                
+                # Determine status
+                if filename in removed_files:
+                    status = 'removed'
+                elif after:
+                    status = 'processed'
+                else:
+                    status = 'error'
+                
+                # Calculate changes
+                duration_change = (after.get('duration', 0) or 0) - (before.get('duration', 0) or 0)
+                lufs_change = (after.get('lufs', 0) or 0) - (before.get('lufs', 0) or 0)
+                peak_change = (after.get('peak_db', 0) or 0) - (before.get('peak_db', 0) or 0)
+                
+                # Gain applied is approximately the LUFS change
+                gain_applied = lufs_change if status == 'processed' else None
+                
+                # Was cropped if duration decreased significantly
+                was_cropped = duration_change < -0.1 if status == 'processed' else False
+                
+                writer.writerow([
+                    filename, status,
+                    f"{before.get('duration', 0):.2f}" if before.get('duration') else '',
+                    f"{after.get('duration', 0):.2f}" if after.get('duration') else '',
+                    f"{duration_change:.2f}" if status == 'processed' else '',
+                    f"{before.get('lufs', 0):.1f}" if before.get('lufs') and before.get('lufs') > -np.inf else '',
+                    f"{after.get('lufs', 0):.1f}" if after.get('lufs') and after.get('lufs') > -np.inf else '',
+                    f"{lufs_change:.1f}" if status == 'processed' and gain_applied else '',
+                    f"{before.get('peak_db', 0):.2f}" if before.get('peak_db') and before.get('peak_db') > -np.inf else '',
+                    f"{after.get('peak_db', 0):.2f}" if after.get('peak_db') and after.get('peak_db') > -np.inf else '',
+                    f"{peak_change:.2f}" if status == 'processed' else '',
+                    f"{gain_applied:.1f}" if gain_applied else '',
+                    'yes' if was_cropped else 'no',
+                    'yes' if filename in removed_files else 'no',
+                    before.get('error', '') or after.get('error', '')
+                ])
+        
+        print(f"✅ CSV report saved to: {report_path}")
+        
+        # Print summary statistics
+        processed_files = [f for f in all_files if f in after_measurements and after_measurements[f].get('lufs')]
+        if processed_files:
+            after_lufs = [after_measurements[f]['lufs'] for f in processed_files if after_measurements[f]['lufs'] > -np.inf]
+            target_lufs = -14.0
+            within_target = sum(1 for l in after_lufs if abs(l - target_lufs) <= 0.5)
+            
+            print("\n" + "="*80)
+            print("SUMMARY STATISTICS")
+            print("="*80)
+            print(f"\n🔊 Loudness (LUFS):")
+            if after_lufs:
+                print(f"   After:  {np.mean(after_lufs):.1f} ± {np.std(after_lufs):.1f} LUFS")
+                print(f"   Target: {target_lufs} LUFS")
+                print(f"   Files within ±0.5 LUFS of target: {within_target}/{len(after_lufs)} ({100*within_target/len(after_lufs):.1f}%)")
+            print("\n" + "="*80)
         
         # Update CSV to remove entries for deleted files
         if normalize_stats.get('removed', 0) > 0 and csv_path.exists():
             print("\n🧹 Updating CSV to remove entries for deleted audio files...")
-            removed_names = {name for name, _ in normalize_stats.get('removed_files', [])}
+            # removed_files is a list of filenames
+            removed_names = set(normalize_stats.get('removed_files', []))
             
             # Read existing CSV
-            import csv as csv_module
             rows_to_keep = []
             try:
                 with open(csv_path, 'r', encoding='utf-8') as f:
                     reader = csv_module.DictReader(f)
                     fieldnames = reader.fieldnames
                     for row in reader:
-                        # Check if the audio file still exists
-                        filename = f"{row.get('artist', '')} - {row.get('title', '')}.mp3"
-                        if filename not in removed_names:
+                        filename_from_row = f"{row.get('artist', '')} - {row.get('title', '')}.mp3"
+                        # If there is a 'filename' column, use it.
+                        if 'filename' in row and row['filename']:
+                             filename_from_row = row['filename']
+                        
+                        if filename_from_row not in removed_names:
                             rows_to_keep.append(row)
                 
                 # Write updated CSV
@@ -159,8 +330,8 @@ def main():
                     writer = csv_module.DictWriter(f, fieldnames=fieldnames)
                     writer.writeheader()
                     writer.writerows(rows_to_keep)
-                
-                print(f"✓ CSV updated: {len(rows_to_keep)} entries remaining")
+                    
+                print(f"✓ Removed {len(removed_names)} entries from CSV")
             except Exception as e:
                 print(f"⚠️  Error updating CSV: {e}")
         
