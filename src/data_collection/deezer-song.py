@@ -1,4 +1,5 @@
 import requests
+import argparse
 import os
 import sys
 import re
@@ -152,8 +153,8 @@ def download_and_save_song(song, artist_name=""):
 def process_song(song_data):
     """Process a single song from CSV data"""
     try:
-        # Add small delay to avoid rate limiting
-        time.sleep(0.1)
+        # Add delay to avoid rate limiting (0.5s is safer for Deezer API)
+        time.sleep(0.5)
         
         # Extract data from dict (for CSV) or parse string (for text file)
         if isinstance(song_data, dict):
@@ -444,6 +445,10 @@ def save_songs_to_csv_legacy(songs_data, filename):
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Download song previews from Deezer")
+    parser.add_argument("--limit", type=int, help="Limit number of songs to download this session")
+    args = parser.parse_args()
+
     start_time = time.time()
     
     # Load search cache from previous runs
@@ -494,6 +499,11 @@ def main():
     # Filter out already processed songs
     songs_to_process = [song for song in songs_list 
                        if song.get('index', -1) not in processed_indices]
+
+    # Apply limit if specified
+    if args.limit:
+        print(f"⚠️  Limit applied: Processing only first {args.limit} available songs")
+        songs_to_process = songs_to_process[:args.limit]
     
     total_count = len(songs_list)
     already_processed = len(processed_indices)
@@ -510,8 +520,8 @@ def main():
     # Ensure the output folder exists
     os.makedirs(DEEZE_AUDIO_FOLDER, exist_ok=True)
 
-    # Determine number of worker threads
-    num_workers = min(32, remaining, multiprocessing.cpu_count() * 4)
+    # Determine number of worker threads (reduced to 8 to avoid API rate limits)
+    num_workers = min(8, remaining)
     print(f"Starting parallel processing with {num_workers} workers...\n")
 
     songs_data = checkpoint.get('downloaded_songs', [])
@@ -601,10 +611,12 @@ def main():
             print("All songs downloaded successfully!")
             break
         
-        # Continue to next retry
+        # Continue to next retry with exponential backoff
         attempt += 1
-        print(f"\nWaiting 5 seconds before retry...\n")
-        time.sleep(5)
+        backoff_time = 5 * (2 ** (attempt - 2))  # 5s, 10s, 20s, 40s...
+        backoff_time = min(backoff_time, 60)  # Cap at 60 seconds
+        print(f"\nWaiting {backoff_time} seconds before retry (exponential backoff)...\n")
+        time.sleep(backoff_time)
 
     # Final checkpoint save
     checkpoint['processed_indices'] = list(processed_indices)
