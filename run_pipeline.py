@@ -126,111 +126,130 @@ def main():
         print("="*60 + "\n")
         
     if "preprocess" not in args.skip:
-        # Normalize audio files to exactly 29 seconds
+        # Adaptive loudness normalization with scan pass
         print("\n" + "="*60)
-        print("AUDIO PREPROCESSING: Cropping & Loudness Normalization")
+        print("AUDIO PREPROCESSING: Adaptive Loudness Normalization")
         print("="*60)
-        print("   - Removing songs shorter than 29 seconds")
-        print("   - Cropping songs longer than 29 seconds")
-        print("   - Normalizing loudness to -14 LUFS (ITU-R BS.1770)")
-        print("   - Limiting True Peak to -1.0 dBTP")
-        print("   - Generating before/after CSV report")
+        print("   - Step 1: Scan all files for LUFS and true peak")
+        print("   - Step 2: Analyze distribution and select optimal target")
+        print("   - Step 3: Apply consistent normalization with peak limiting")
+        print("   - Step 4: Verify and generate report")
         print()
         
         import csv as csv_module
+        import os
+        import warnings
+        import logging
         from tqdm import tqdm
         import librosa
         import pyloudnorm as pyln
         import numpy as np
         from src.audio_preprocessing.processor import AudioPreprocessor
+        from src.audio_preprocessing.loudness_scanner import LoudnessScanner, save_scan_results
+        
+        # Suppress all audio-related warnings (ID3v2, mpg123, audioread, etc.)
+        warnings.filterwarnings("ignore")
+        logging.getLogger("audioread").setLevel(logging.ERROR)
+        logging.getLogger("librosa").setLevel(logging.ERROR)
+        
+        # Suppress C-level warnings from mpg123 by redirecting stderr temporarily
+        import io
+        
+        class SuppressStderr:
+            """Context manager to suppress stderr (catches C-level warnings from mpg123)"""
+            def __enter__(self):
+                self._stderr = sys.stderr
+                sys.stderr = io.StringIO()
+                return self
+            def __exit__(self, *args):
+                sys.stderr = self._stderr
         
         audio_dir = here / "audio_files"
         csv_path = here / "data" / "songs.csv"
         report_path = here / "output" / "preprocessing_report.csv"
+        scan_path = here / "output" / "loudness_scan.csv"
         report_path.parent.mkdir(parents=True, exist_ok=True)
         
-        # Step 1: Measure BEFORE preprocessing
-        print("📊 Step 1/3: Measuring original audio characteristics...")
-        audio_files = sorted(audio_dir.glob("*.mp3"))
-        before_measurements = {}
+        # ===== STEP 1: SCAN PASS =====
+        print("📊 Step 1/4: Scanning all files for LUFS and true peak...")
+        scanner = LoudnessScanner(sample_rate=22050)
+        scan_results = scanner.scan_directory(str(audio_dir))
         
-        meter = pyln.Meter(22050)  # Sample rate for measurement
-        
-        for audio_file in tqdm(audio_files, desc="Analyzing"):
-            try:
-                # Load audio
-                y, sr = librosa.load(str(audio_file), sr=22050, mono=True)
-                duration = len(y) / sr
-                
-                # Measure loudness
-                if len(y) > 0:
-                    loudness = meter.integrated_loudness(y)
-                    peak_db = 20 * np.log10(np.max(np.abs(y))) if np.max(np.abs(y)) > 0 else -np.inf
-                else:
-                    loudness = -np.inf
-                    peak_db = -np.inf
-                
-                before_measurements[audio_file.name] = {
-                    'duration': duration,
-                    'lufs': loudness,
-                    'peak_db': peak_db
+        if len(scan_results) == 0:
+            print("❌ No audio files found. Skipping preprocessing.")
+        else:
+            # ===== STEP 2: ANALYZE AND SELECT TARGET =====
+            print("\n🎯 Step 2/4: Analyzing distribution and selecting target...")
+            analysis = scanner.analyze_distribution(
+                scan_results,
+                headroom_db=-1.0,  # EBU R128 compliant
+                target_coverage=0.95  # 95% of tracks reach target without limiting
+            )
+            scanner.print_analysis(analysis)
+            
+            # Save scan results for reference
+            save_scan_results(scan_results, analysis, str(scan_path))
+            
+            target_lufs = analysis.suggested_target_lufs
+            
+            # Store before measurements from scan
+            before_measurements = {}
+            for _, row in scan_results.iterrows():
+                before_measurements[row['filename']] = {
+                    'duration': row['duration_seconds'],
+                    'lufs': row['integrated_lufs'],
+                    'peak_db': row['true_peak_dbfs'],
+                    'error': row.get('error')
                 }
-            except Exception as e:
-                before_measurements[audio_file.name] = {
-                    'duration': None,
-                    'lufs': None,
-                    'peak_db': None,
-                    'error': str(e)
-                }
-        
-        print(f"✅ Measured {len(before_measurements)} files")
-        
-        # Step 2: Run preprocessing
-        print("\n🔧 Step 2/3: Running preprocessing pipeline...")
-        processor = AudioPreprocessor(
-            target_duration=29.0,
-            target_lufs=-14.0,
-            max_true_peak=-1.0
-        )
-        
-        normalize_stats = processor.process_directory(str(audio_dir))
-        
-        # Step 3: Measure AFTER preprocessing and create report
-        print("\n📊 Step 3/3: Measuring processed audio and generating report...")
-        audio_files_after = sorted(audio_dir.glob("*.mp3"))
-        after_measurements = {}
-        
-        for audio_file in tqdm(audio_files_after, desc="Analyzing"):
-            try:
-                # Load audio
-                y, sr = librosa.load(str(audio_file), sr=22050, mono=True)
-                duration = len(y) / sr
-                
-                # Measure loudness
-                if len(y) > 0:
-                    loudness = meter.integrated_loudness(y)
-                    peak_db = 20 * np.log10(np.max(np.abs(y))) if np.max(np.abs(y)) > 0 else -np.inf
-                else:
-                    loudness = -np.inf
-                    peak_db = -np.inf
-                
-                after_measurements[audio_file.name] = {
-                    'duration': duration,
-                    'lufs': loudness,
-                    'peak_db': peak_db
-                }
-            except Exception as e:
-                after_measurements[audio_file.name] = {
-                    'duration': None,
-                    'lufs': None,
-                    'peak_db': None,
-                    'error': str(e)
-                }
-        
-        print(f"✅ Measured {len(after_measurements)} files")
-        
-        # Create CSV report
-        print("\n💾 Creating CSV report...")
+            
+            # ===== STEP 3: NORMALIZE =====
+            print(f"\n🔧 Step 3/4: Normalizing to {target_lufs} LUFS (adaptive target)...")
+            processor = AudioPreprocessor(
+                target_duration=29.0,
+                target_lufs=target_lufs,
+                max_true_peak=-1.0
+            )
+            
+            normalize_stats = processor.process_directory(str(audio_dir))
+            
+            # ===== STEP 4: VERIFY AND REPORT =====
+            print("\n📊 Step 4/4: Verifying results and generating report...")
+            audio_files_after = sorted(audio_dir.glob("*.mp3"))
+            after_measurements = {}
+            meter = pyln.Meter(22050)  # Sample rate for measurement
+            
+            for audio_file in tqdm(audio_files_after, desc="Verifying", leave=False):
+                try:
+                    # Load audio (suppress C-level warnings from mpg123)
+                    with SuppressStderr():
+                        y, sr = librosa.load(str(audio_file), sr=22050, mono=True)
+                    duration = len(y) / sr
+                    
+                    # Measure loudness
+                    if len(y) > 0:
+                        loudness = meter.integrated_loudness(y)
+                        peak_db = 20 * np.log10(np.max(np.abs(y))) if np.max(np.abs(y)) > 0 else -np.inf
+                    else:
+                        loudness = -np.inf
+                        peak_db = -np.inf
+                    
+                    after_measurements[audio_file.name] = {
+                        'duration': duration,
+                        'lufs': loudness,
+                        'peak_db': peak_db
+                    }
+                except Exception as e:
+                    after_measurements[audio_file.name] = {
+                        'duration': None,
+                        'lufs': None,
+                        'peak_db': None,
+                        'error': str(e)
+                    }
+            
+            print(f"✅ Verified {len(after_measurements)} files")
+            
+            # Create CSV report
+            print("\n💾 Creating CSV report...")
         with open(report_path, 'w', newline='', encoding='utf-8') as f:
             writer = csv_module.writer(f)
             writer.writerow([
@@ -290,19 +309,166 @@ def main():
         # Print summary statistics
         processed_files = [f for f in all_files if f in after_measurements and after_measurements[f].get('lufs')]
         if processed_files:
-            after_lufs = [after_measurements[f]['lufs'] for f in processed_files if after_measurements[f]['lufs'] > -np.inf]
-            target_lufs = -14.0
-            within_target = sum(1 for l in after_lufs if abs(l - target_lufs) <= 0.5)
+            # Collect all measurements
+            before_lufs_list = []
+            after_lufs_list = []
+            before_peak_list = []
+            after_peak_list = []
             
-            print("\n" + "="*80)
-            print("SUMMARY STATISTICS")
-            print("="*80)
-            print(f"\n🔊 Loudness (LUFS):")
-            if after_lufs:
-                print(f"   After:  {np.mean(after_lufs):.1f} ± {np.std(after_lufs):.1f} LUFS")
-                print(f"   Target: {target_lufs} LUFS")
-                print(f"   Files within ±0.5 LUFS of target: {within_target}/{len(after_lufs)} ({100*within_target/len(after_lufs):.1f}%)")
-            print("\n" + "="*80)
+            for f in processed_files:
+                if f in after_measurements and after_measurements[f].get('lufs') and after_measurements[f]['lufs'] > -np.inf:
+                    after_lufs_list.append(after_measurements[f]['lufs'])
+                    after_peak_list.append(after_measurements[f].get('peak_db', 0))
+                if f in before_measurements and before_measurements[f].get('lufs') and before_measurements[f]['lufs'] > -np.inf:
+                    before_lufs_list.append(before_measurements[f]['lufs'])
+                    before_peak_list.append(before_measurements[f].get('peak_db', 0))
+            
+            # target_lufs already set from analysis.suggested_target_lufs
+            within_target = sum(1 for l in after_lufs_list if abs(l - target_lufs) <= 0.5)
+            
+            print("\n")
+            print("╔" + "═"*78 + "╗")
+            print("║" + " "*28 + "📊 PREPROCESSING STATISTICS" + " "*23 + "║")
+            print("╚" + "═"*78 + "╝")
+            
+            # ===== BEFORE vs AFTER COMPARISON =====
+            print("\n┌" + "─"*76 + "┐")
+            print("│  📈 BEFORE vs AFTER COMPARISON" + " "*44 + "│")
+            print("├" + "─"*76 + "┤")
+            print("│" + " "*76 + "│")
+            print(f"│  {'Metric':<25}  {'BEFORE':<20}  {'AFTER':<20}    │")
+            print("│  " + "─"*25 + "  " + "─"*20 + "  " + "─"*20 + "    │")
+            
+            if before_lufs_list and after_lufs_list:
+                before_mean = np.mean(before_lufs_list)
+                before_std = np.std(before_lufs_list)
+                after_mean = np.mean(after_lufs_list)
+                after_std = np.std(after_lufs_list)
+                
+                print(f"│  {'Loudness (Mean)':<25}  {before_mean:>6.1f} LUFS          {after_mean:>6.1f} LUFS          │")
+                print(f"│  {'Loudness (Std Dev)':<25}  {before_std:>6.1f} LUFS          {after_std:>6.1f} LUFS          │")
+                print(f"│  {'Loudness (Min)':<25}  {np.min(before_lufs_list):>6.1f} LUFS          {np.min(after_lufs_list):>6.1f} LUFS          │")
+                print(f"│  {'Loudness (Max)':<25}  {np.max(before_lufs_list):>6.1f} LUFS          {np.max(after_lufs_list):>6.1f} LUFS          │")
+                
+                before_peak_valid = [p for p in before_peak_list if p and p > -np.inf]
+                after_peak_valid = [p for p in after_peak_list if p and p > -np.inf]
+                if before_peak_valid and after_peak_valid:
+                    print("│" + " "*76 + "│")
+                    print(f"│  {'Peak Level (Mean)':<25}  {np.mean(before_peak_valid):>6.1f} dBFS         {np.mean(after_peak_valid):>6.1f} dBFS         │")
+                    print(f"│  {'Peak Level (Max)':<25}  {np.max(before_peak_valid):>6.1f} dBFS         {np.max(after_peak_valid):>6.1f} dBFS         │")
+            
+            print("│" + " "*76 + "│")
+            print("└" + "─"*76 + "┘")
+            
+            # ===== NORMALIZATION SUMMARY =====
+            print("\n┌" + "─"*76 + "┐")
+            print(f"│  🎯 NORMALIZATION SUMMARY (Target: {target_lufs} LUFS)" + " "*(45-len(f"(Target: {target_lufs} LUFS)")) + "│")
+            print("├" + "─"*76 + "┤")
+            
+            total_processed = len(after_lufs_list)
+            at_target = sum(1 for l in after_lufs_list if abs(l - target_lufs) <= 0.5)
+            above_target = sum(1 for l in after_lufs_list if l > target_lufs + 0.5)
+            below_target = sum(1 for l in after_lufs_list if l < target_lufs - 0.5)
+            
+            # Visual bar chart
+            at_pct = at_target / total_processed * 100 if total_processed > 0 else 0
+            above_pct = above_target / total_processed * 100 if total_processed > 0 else 0
+            below_pct = below_target / total_processed * 100 if total_processed > 0 else 0
+            
+            print("│" + " "*76 + "│")
+            print(f"│  Total processed:  {total_processed:,}" + " "*(56-len(f"{total_processed:,}")) + "│")
+            print("│" + " "*76 + "│")
+            
+            bar_width = 40
+            at_bar = "█" * int(at_pct / 100 * bar_width)
+            below_bar = "█" * int(below_pct / 100 * bar_width)
+            
+            print(f"│  ✅ At target (±0.5 dB):    {at_bar:<{bar_width}}  {at_target:>5} ({at_pct:>5.1f}%)  │")
+            print(f"│  ⬇️  Below target:          {below_bar:<{bar_width}}  {below_target:>5} ({below_pct:>5.1f}%)  │")
+            if above_target > 0:
+                above_bar = "█" * int(above_pct / 100 * bar_width)
+                print(f"│  ⬆️  Above target:          {above_bar:<{bar_width}}  {above_target:>5} ({above_pct:>5.1f}%)  │")
+            print("│" + " "*76 + "│")
+            print("└" + "─"*76 + "┘")
+            
+            # ===== PEAK-LIMITED TRACKS (GAIN CAPPING) =====
+            lufs_deviations = []
+            peak_limited_files = []
+            
+            for f in processed_files:
+                if f in after_measurements and after_measurements[f].get('lufs') and after_measurements[f]['lufs'] > -np.inf:
+                    final_lufs = after_measurements[f]['lufs']
+                    deviation = final_lufs - target_lufs
+                    
+                    if deviation < -0.5:
+                        lufs_deviations.append(deviation)
+                        peak_limited_files.append({
+                            'filename': f,
+                            'final_lufs': final_lufs,
+                            'deviation': deviation,
+                            'before_lufs': before_measurements.get(f, {}).get('lufs', None),
+                            'before_peak': before_measurements.get(f, {}).get('peak_db', None)
+                        })
+            
+            peak_limited_count = len(peak_limited_files)
+            peak_limited_pct = (peak_limited_count / total_processed * 100) if total_processed > 0 else 0
+            
+            print("\n┌" + "─"*76 + "┐")
+            print("│  🎚️  GAIN CAPPING ANALYSIS (Tracks that couldn't reach target)" + " "*13 + "│")
+            print("├" + "─"*76 + "┤")
+            print("│" + " "*76 + "│")
+            print(f"│  Peak-limited tracks:  {peak_limited_count:,} / {total_processed:,} ({peak_limited_pct:.1f}%)" + " "*(43-len(f"{peak_limited_count:,} / {total_processed:,} ({peak_limited_pct:.1f}%)")) + "│")
+            
+            if peak_limited_count > 0:
+                avg_deviation = np.mean(lufs_deviations)
+                min_deviation = np.min(lufs_deviations)  # Most negative = furthest from target
+                max_deviation = np.max(lufs_deviations)  # Least negative = closest to target
+                median_deviation = np.median(lufs_deviations)
+                
+                print("│" + " "*76 + "│")
+                print(f"│  Average final LUFS:   {target_lufs + avg_deviation:.1f} LUFS (deviation: {avg_deviation:+.2f} dB)" + " "*24 + "│")
+                print(f"│  Median final LUFS:    {target_lufs + median_deviation:.1f} LUFS (deviation: {median_deviation:+.2f} dB)" + " "*24 + "│")
+                print(f"│  Quietest track:       {target_lufs + min_deviation:.1f} LUFS (deviation: {min_deviation:+.2f} dB)" + " "*24 + "│")
+                
+                # Distribution by deviation ranges
+                print("│" + " "*76 + "│")
+                print("│  📊 Distribution by LUFS deviation from target:" + " "*27 + "│")
+                print("│" + " "*76 + "│")
+                
+                deviation_ranges = [
+                    (-0.5, -1.0, "-0.5 to -1.0 dB", "Very close"),
+                    (-1.0, -2.0, "-1.0 to -2.0 dB", "Slightly below"),
+                    (-2.0, -3.0, "-2.0 to -3.0 dB", "Moderately below"),
+                    (-3.0, -5.0, "-3.0 to -5.0 dB", "Noticeably below"),
+                    (-5.0, -10.0, "-5.0 to -10.0 dB", "Significantly below"),
+                    (-10.0, -np.inf, "< -10.0 dB", "Very loud originals")
+                ]
+                
+                for lower, upper, label, desc in deviation_ranges:
+                    if upper == -np.inf:
+                        count = sum(1 for d in lufs_deviations if d < lower)
+                    else:
+                        count = sum(1 for d in lufs_deviations if upper <= d < lower)
+                    if count > 0:
+                        pct = count / peak_limited_count * 100
+                        bar_len = int(pct / 100 * 25)
+                        bar = "█" * bar_len + "░" * (25 - bar_len)
+                        print(f"│     {label:<18}  {bar}  {count:>4} ({pct:>5.1f}%)     │")
+                
+                # Top 5 most affected tracks (more concise)
+                print("│" + " "*76 + "│")
+                print("│  🔝 Top 5 most affected tracks:" + " "*43 + "│")
+                sorted_limited = sorted(peak_limited_files, key=lambda x: x['deviation'])[:5]
+                for i, track in enumerate(sorted_limited, 1):
+                    name = track['filename'][:45] + "..." if len(track['filename']) > 48 else track['filename']
+                    print(f"│     {i}. {name:<50} {track['final_lufs']:>5.1f} LUFS  │")
+            else:
+                print("│" + " "*76 + "│")
+                print("│  ✅ All tracks successfully reached the target loudness!" + " "*18 + "│")
+            
+            print("│" + " "*76 + "│")
+            print("└" + "─"*76 + "┘")
+            print()
         
         # Update CSV to remove entries for deleted files
         if normalize_stats.get('removed', 0) > 0 and csv_path.exists():

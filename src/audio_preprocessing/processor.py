@@ -51,8 +51,31 @@ from .loudness_normalizer import LoudnessNormalizer
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Suppress warnings from librosa/audioread
+# Suppress warnings from librosa/audioread/mpg123
 warnings.filterwarnings("ignore")
+logging.getLogger("audioread").setLevel(logging.ERROR)
+logging.getLogger("librosa").setLevel(logging.ERROR)
+
+# Redirect stderr to suppress C-level mpg123 warnings
+import sys
+import os
+import io
+
+class _SuppressStderr:
+    """Context manager to suppress stderr (catches C-level warnings from mpg123)"""
+    def __init__(self):
+        self.null_fds = [os.open(os.devnull, os.O_RDWR) for x in range(2)]
+        self.save_fds = [os.dup(1), os.dup(2)]
+
+    def __enter__(self):
+        os.dup2(self.null_fds[0], 1)
+        os.dup2(self.null_fds[1], 2)
+
+    def __exit__(self, *_):
+        os.dup2(self.save_fds[0], 1)
+        os.dup2(self.save_fds[1], 2)
+        for fd in self.null_fds + self.save_fds:
+            os.close(fd)
 
 
 class AudioPreprocessor:
@@ -131,8 +154,9 @@ class AudioPreprocessor:
         }
 
         try:
-            # 1. Load Audio
-            y, sr = librosa.load(path, sr=self.sample_rate, mono=True)
+            # 1. Load Audio (suppress C-level warnings from mpg123)
+            with _SuppressStderr():
+                y, sr = librosa.load(path, sr=self.sample_rate, mono=True)
             duration = librosa.get_duration(y=y, sr=sr)
             result['original_duration'] = round(duration, 3)
 

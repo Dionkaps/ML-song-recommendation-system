@@ -24,12 +24,23 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 @contextlib.contextmanager
 def suppress_stderr():
     """Context manager to temporarily redirect stderr to suppress warnings."""
-    stderr = sys.stderr
-    sys.stderr = io.StringIO()
+    # Open a pair of null files
+    null_fds = [os.open(os.devnull, os.O_RDWR) for x in range(2)]
+    # Save the actual stdout (1) and stderr (2) file descriptors.
+    save_fds = [os.dup(1), os.dup(2)]
+
     try:
+        # Assign the null pointers to stdout and stderr.
+        os.dup2(null_fds[0], 1)
+        os.dup2(null_fds[1], 2)
         yield
     finally:
-        sys.stderr = stderr
+        # Re-assign the real stdout/stderr back to (1) and (2)
+        os.dup2(save_fds[0], 1)
+        os.dup2(save_fds[1], 2)
+        # Close the null files and the temporary fds
+        for fd in null_fds + save_fds:
+            os.close(fd)
 
 
 def extract_mfcc(y, sr, n_mfcc=fv.n_mfcc):
