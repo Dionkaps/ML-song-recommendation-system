@@ -1,0 +1,8 @@
+Loudness Scan Summary
+==================================================
+Total Tracks: 7834
+LUFS Mean: -16.7
+LUFS Std Dev: 4.7
+LUFS Range: -66.9 to -3.9
+Suggested Target: -15.8 LUFS
+Tracks Needing Limiting: 3990 (50.9%)
