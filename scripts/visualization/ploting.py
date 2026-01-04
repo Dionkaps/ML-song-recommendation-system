@@ -3,6 +3,7 @@ import glob
 import os
 from pathlib import Path
 import sys
+import warnings
 
 # Ensure we are running from project root
 project_root = Path(__file__).resolve().parent.parent.parent
@@ -10,26 +11,45 @@ os.chdir(project_root)
 sys.path.insert(0, str(project_root))
 
 import librosa
+import librosa.display
 from matplotlib import pyplot as plt
 import numpy as np
+from tqdm import tqdm
+
+# Suppress librosa warning about audioread
+warnings.filterwarnings("ignore", category=UserWarning)
 
 def plot_feature(feature, y, sr, hop_length,
                  feature_type='mfcc',
                  n_fft=2048,
                  output_dir=None,
                  base_filename=None):
-    plt.figure(figsize=(10, 4))
+    plt.figure(figsize=(12, 6))
     song_name = base_filename if base_filename else "Unknown Song"
 
-    if feature_type == 'mfcc':
+    if feature_type in ['mfcc', 'delta_mfcc', 'delta2_mfcc']:
         librosa.display.specshow(feature, x_axis='time', sr=sr, hop_length=hop_length)
         plt.colorbar()
-        plt.title(f'MFCCs for "{song_name}"')
+        plt.title(f'{feature_type.upper()} for "{song_name}"')
+    
     elif feature_type == 'melspectrogram':
-        librosa.display.specshow(feature, x_axis='time', y_axis='mel',
+        # Feature is usually in dB if extracted as such, or power. 
+        # extract_features.py saves it as power if it follows librosa.feature.melspectrogram
+        # But wait, extract_features.py doesn't actually extract melspectrogram by default?
+        # Let's check extract_features.py again. It extracts: 
+        # mfcc, delta, delta2, centroid, rolloff, flux, flatness, zcr, chroma, beat
+        # Ah, ploting.py HAD melspectrogram. 
+        librosa.display.specshow(librosa.power_to_db(feature, ref=np.max), 
+                                 x_axis='time', y_axis='mel',
                                  sr=sr, hop_length=hop_length, cmap='viridis')
         plt.colorbar(format='%+2.0f dB')
         plt.title(f'Mel-Spectrogram (dB) for "{song_name}"')
+
+    elif feature_type == 'chroma':
+        librosa.display.specshow(feature, y_axis='chroma', x_axis='time', sr=sr, hop_length=hop_length)
+        plt.colorbar()
+        plt.title(f'Chroma Feature for "{song_name}"')
+
     elif feature_type == 'spectral_centroid':
         times = np.arange(len(y)) / sr
         plt.plot(times, y, alpha=0.4, label='Waveform')
@@ -41,6 +61,27 @@ def plot_feature(feature, y, sr, hop_length,
         plt.ylabel('Amplitude / Frequency (Hz)')
         plt.title(f'Spectral Centroid for "{song_name}"')
         plt.legend()
+
+    elif feature_type == 'spectral_rolloff':
+        times = np.arange(len(y)) / sr
+        plt.plot(times, y, alpha=0.4, label='Waveform')
+        frames = range(len(feature[0]))
+        t_rolloff = librosa.frames_to_time(frames, sr=sr, hop_length=hop_length)
+        plt.plot(t_rolloff, feature[0], color='y', label='Spectral Rolloff')
+        plt.xlabel('Time (s)')
+        plt.ylabel('Frequency (Hz)')
+        plt.title(f'Spectral Rolloff for "{song_name}"')
+        plt.legend()
+
+    elif feature_type == 'spectral_flux':
+        frames = range(len(feature[0]))
+        t_flux = librosa.frames_to_time(frames, sr=sr, hop_length=hop_length)
+        plt.plot(t_flux, feature[0], color='c', label='Spectral Flux')
+        plt.xlabel('Time (s)')
+        plt.ylabel('Flux (Onset Strength)')
+        plt.title(f'Spectral Flux for "{song_name}"')
+        plt.legend()
+
     elif feature_type == 'spectral_flatness':
         frames = range(len(feature[0]))
         t_flatness = librosa.frames_to_time(frames, sr=sr, hop_length=hop_length)
@@ -49,6 +90,7 @@ def plot_feature(feature, y, sr, hop_length,
         plt.ylabel('Flatness')
         plt.title(f'Spectral Flatness for "{song_name}"')
         plt.legend()
+
     elif feature_type == 'zero_crossing_rate':
         frames = range(len(feature[0]))
         t_zcr = librosa.frames_to_time(frames, sr=sr, hop_length=hop_length)
@@ -57,21 +99,38 @@ def plot_feature(feature, y, sr, hop_length,
         plt.ylabel('Rate')
         plt.title(f'Zero-Crossing Rate for "{song_name}"')
         plt.legend()
+
+    elif feature_type == 'beat_strength':
+        # Beat strength features: tempo, mean_onset_strength, std_onset_strength, onset_rate
+        # It's a [4, 1] array
+        labels = ['Tempo (BPM)', 'Mean Onset', 'Std Onset', 'Onset Rate']
+        values = feature.flatten()
+        plt.bar(labels, values, color=['skyblue', 'salmon', 'lightgreen', 'plum'])
+        plt.title(f'Beat & Rhythm Features for "{song_name}"')
+        for i, v in enumerate(values):
+            plt.text(i, v, f"{v:.2f}", ha='center', va='bottom')
+
     else:
-        raise ValueError("Invalid feature_type for plotting.")
+        # Generic plot for unknown features if they are 1D/2D
+        if feature.ndim == 2 and feature.shape[0] > 1:
+            librosa.display.specshow(feature, x_axis='time', sr=sr, hop_length=hop_length)
+            plt.title(f'{feature_type.replace("_", " ").title()} for "{song_name}"')
+        else:
+            plt.plot(feature.flatten())
+            plt.title(f'{feature_type.replace("_", " ").title()} for "{song_name}"')
 
     plt.tight_layout()
     if output_dir and base_filename:
-        output_dir = Path(output_dir)
-        plot_filename = f"{base_filename}_{feature_type}.png"
+        output_dir = Path(output_dir) / base_filename
+        output_dir.mkdir(parents=True, exist_ok=True)
+        plot_filename = f"{feature_type}.png"
         plot_path = output_dir / plot_filename
         plt.savefig(plot_path)
-        print(f"Plot saved to: {plot_path}")
         plt.close()
     else:
         plt.show()
 
-def run_plotting(audio_dir='genres_original', features_dir='output/features', plots_dir='output/plots'):
+def run_plotting(audio_dir='audio_files', features_dir='output/features', plots_dir='output/plots', limit=None):
     audio_dir_path = Path(audio_dir)
     features_dir_path = Path(features_dir)
     plots_dir_path = Path(plots_dir)
@@ -82,77 +141,67 @@ def run_plotting(audio_dir='genres_original', features_dir='output/features', pl
 
     plots_dir_path.mkdir(parents=True, exist_ok=True)
 
-    # Get all genre directories
-    genre_dirs = [d for d in glob.glob(str(audio_dir_path / "*")) if Path(d).is_dir()]
-    if not genre_dirs:
-        print(f"No genre directories found in {audio_dir_path}.")
-        return
-        
-    # Collect all .wav files from all genre directories
-    wav_files = []
-    for genre_dir in genre_dirs:
-        genre_name = os.path.basename(genre_dir)
-        genre_wav_files = glob.glob(os.path.join(genre_dir, "*.wav"))
-        wav_files.extend(genre_wav_files)
-        print(f"Found {len(genre_wav_files)} .wav files in {genre_name} genre.")
+    # Collect all audio files (support multiple formats)
+    audio_extensions = ['*.wav', '*.mp3', '*.flac', '*.m4a']
+    audio_files = []
     
-    if not wav_files:
-        print("No .wav files found in any genre directory.")
+    for ext in audio_extensions:
+        found = glob.glob(str(audio_dir_path / ext))
+        audio_files.extend(found)
+    
+    if not audio_files:
+        # Fallback to genre directories if flat structure doesn't have files
+        genre_dirs = [d for d in glob.glob(str(audio_dir_path / "*")) if Path(d).is_dir()]
+        for genre_dir in genre_dirs:
+            for ext in audio_extensions:
+                audio_files.extend(glob.glob(os.path.join(genre_dir, ext)))
+
+    if not audio_files:
+        print(f"No audio files found in {audio_dir_path}.")
         return
 
-    suffix = ".npy"
+    if limit:
+        audio_files = audio_files[:limit]
+        print(f"Limiting to first {limit} songs.")
 
-    for wav_path in wav_files:
+    print(f"Found {len(audio_files)} files to plot.")
+
+    for wav_path in tqdm(audio_files, desc="Plotting songs"):
         base_filename = os.path.splitext(os.path.basename(wav_path))[0]
-        print(f"\nGenerating plots for: {base_filename}.wav")
-        feature_files = {
-            'mfcc': features_dir_path / f"{base_filename}_mfcc{suffix}",
-            'melspectrogram': features_dir_path / f"{base_filename}_melspectrogram{suffix}",
-            'spectral_centroid': features_dir_path / f"{base_filename}_spectral_centroid{suffix}",
-            'spectral_flatness': features_dir_path / f"{base_filename}_spectral_flatness{suffix}",
-            'zero_crossing_rate': features_dir_path / f"{base_filename}_zero_crossing_rate{suffix}"
-        }
-
-        missing_features = [ft for ft, path in feature_files.items() if not path.is_file()]
-        if missing_features:
-            print(f"Missing feature files for '{base_filename}.wav': {', '.join(missing_features)}. Skipping.")
-            continue
+        
+        # Features extracted by extract_features.py
+        feature_types = [
+            'mfcc', 'delta_mfcc', 'delta2_mfcc', 
+            'spectral_centroid', 'spectral_rolloff', 'spectral_flux', 'spectral_flatness', 
+            'zero_crossing_rate', 'chroma', 'beat_strength'
+        ]
+        
+        # Add legacy features if present
+        feature_types.append('melspectrogram')
 
         try:
             y, sr = librosa.load(wav_path, sr=None)
-            print(f"Loaded '{base_filename}.wav' with sampling rate = {sr} Hz")
-
-            mfccs = np.load(feature_files['mfcc'])
-            mel_spectrogram = np.load(feature_files['melspectrogram'])
-            spectral_centroid = np.load(feature_files['spectral_centroid'])
-            spectral_flatness = np.load(feature_files['spectral_flatness'])
-            zero_crossing_rate = np.load(feature_files['zero_crossing_rate'])
-
-            hop_length = 512
-            n_fft = 2048
-
-            plot_feature(mfccs, y=y, sr=sr, hop_length=hop_length,
-                         feature_type='mfcc', output_dir=plots_dir_path,
-                         base_filename=base_filename)
-            plot_feature(mel_spectrogram, y=y, sr=sr, hop_length=hop_length,
-                         feature_type='melspectrogram', output_dir=plots_dir_path,
-                         base_filename=base_filename)
-            plot_feature(spectral_centroid, y=y, sr=sr, hop_length=hop_length,
-                         feature_type='spectral_centroid', n_fft=n_fft,
-                         output_dir=plots_dir_path, base_filename=base_filename)
-            plot_feature(spectral_flatness, y=y, sr=sr, hop_length=hop_length,
-                         feature_type='spectral_flatness', output_dir=plots_dir_path,
-                         base_filename=base_filename)
-            plot_feature(zero_crossing_rate, y=y, sr=sr, hop_length=hop_length,
-                         feature_type='zero_crossing_rate', output_dir=plots_dir_path,
-                         base_filename=base_filename)
-
-            print(f"Plots saved for '{base_filename}.wav'.")
+            
+            hop_length = 512 # Default from config
+            
+            for ft in feature_types:
+                feat_path = features_dir_path / f"{base_filename}_{ft}.npy"
+                if feat_path.is_file():
+                    feature_data = np.load(feat_path)
+                    plot_feature(feature_data, y=y, sr=sr, hop_length=hop_length,
+                                 feature_type=ft, output_dir=plots_dir_path,
+                                 base_filename=base_filename)
+            
         except Exception as e:
-            print(f"Error plotting features for '{base_filename}.wav': {e}")
+            print(f"Error plotting features for '{base_filename}': {e}")
 
 def main():
     parser = argparse.ArgumentParser(description="Plot audio features from extracted data.")
+    parser.add_argument(
+        "--audio_dir",
+        default="audio_files",
+        help="Path to the folder containing original audio files (default: audio_files)"
+    )
     parser.add_argument(
         "--features_dir",
         default="output/features",
@@ -163,8 +212,19 @@ def main():
         default="output/plots",
         help="Path to the folder to save plots (default: output/plots)"
     )
+    parser.add_argument(
+        "--limit", "-n",
+        type=int,
+        default=None,
+        help="Limit the number of songs to plot"
+    )
     args = parser.parse_args()
-    run_plotting(features_dir=args.features_dir, plots_dir=args.plots_dir)
+    run_plotting(
+        audio_dir=args.audio_dir,
+        features_dir=args.features_dir, 
+        plots_dir=args.plots_dir,
+        limit=args.limit
+    )
 
 if __name__ == "__main__":
     main()
