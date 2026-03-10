@@ -27,7 +27,6 @@ from sklearn.metrics import (
     adjusted_rand_score,
     normalized_mutual_info_score,
 )
-from sklearn.preprocessing import StandardScaler
 from sklearn.cluster import KMeans
 from sklearn.mixture import GaussianMixture
 
@@ -41,9 +40,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from config import feature_vars as fv  # noqa: E402
 from src.clustering.kmeans import (   # noqa: E402
-    _load_genre_mapping,
-    _collect_feature_vectors,
-    build_group_weights,
+    load_clustering_dataset,
 )
 
 # ---------------------------------------------------------------------
@@ -68,40 +65,24 @@ def load_clustering_results(method: str) -> pd.DataFrame:
 
 
 def prepare_feature_data(
-    audio_dir: str = "genres_original",
+    audio_dir: str = "audio_files",
     results_dir: str = "output/features",
     include_genre: bool = fv.include_genre,
 ):
-    """Prepare standardized and weighted feature data."""
-    genre_map, unique_genres = _load_genre_mapping(
-        audio_dir, results_dir, include_genre)
-    file_names, feature_vectors, genres = _collect_feature_vectors(
-        results_dir, genre_map, unique_genres, include_genre
-    )
-
-    if not feature_vectors:
-        raise RuntimeError("No songs with complete feature files were found.")
-
-    X_all = np.vstack(feature_vectors)
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X_all)
-
-    weights = build_group_weights(
+    """Prepare the same feature data used by the clustering algorithms."""
+    file_names, genres, unique_genres, X_prepared = load_clustering_dataset(
+        audio_dir=audio_dir,
+        results_dir=results_dir,
         n_mfcc=fv.n_mfcc,
         n_mels=fv.n_mels,
-        include_genre=include_genre,  # n_genres comes from fv by default
+        include_genre=include_genre,
+        include_msd=fv.include_msd_features,
+        songs_csv_path="data/songs.csv",
     )
-
-    if X_scaled.shape[1] != len(weights):
-        raise ValueError(
-            f"Expected {len(weights)} dims after feature concat, got {X_scaled.shape[1]}"
-        )
-
-    X_weighted = X_scaled * weights
 
     # Create a mapping from song name to index
     song_to_idx = {name: idx for idx, name in enumerate(file_names)}
-    return X_weighted, song_to_idx, genres, unique_genres
+    return X_prepared, song_to_idx, genres, unique_genres
 
 
 # ---------------------------------------------------------------------
@@ -290,7 +271,8 @@ def stability_ari_vade(
             all_gamma = []
             for (x_batch,) in DataLoader(ds, batch_size=2048, shuffle=False):
                 x_batch = x_batch.to(device)
-                _, _, _, _, gamma = model(x_batch)
+                mu, _ = model.encode(x_batch)
+                gamma = model.compute_gamma(mu)
                 all_gamma.append(gamma.cpu().numpy())
             GAMMA = np.vstack(all_gamma)
         
@@ -403,9 +385,9 @@ def main():
 
     # Prepare feature data
     print("\nLoading and preparing feature data...")
-    X_weighted, song_to_idx, genre_labels, unique_genres = prepare_feature_data()
+    X_prepared, song_to_idx, genre_labels, unique_genres = prepare_feature_data()
     print(
-        f"Loaded {len(X_weighted)} songs with {X_weighted.shape[1]} features")
+        f"Loaded {len(X_prepared)} songs with {X_prepared.shape[1]} prepared features")
     print(
         f"Found {len(unique_genres)} unique genres: {', '.join(unique_genres)}")
 
@@ -436,7 +418,7 @@ def main():
                 if song_name in song_to_idx:
                     idx = song_to_idx[song_name]
                     aligned_labels.append(int(row["Cluster"]))
-                    aligned_features.append(X_weighted[idx])
+                    aligned_features.append(X_prepared[idx])
                     aligned_true_labels.append(true_labels_full[idx])
 
             aligned_labels = np.array(aligned_labels)
@@ -456,12 +438,12 @@ def main():
                 k_est = results["N_Clusters"]
                 if isinstance(k_est, (int, np.integer)) and k_est >= 2:
                     stab = stability_ari_kmeans(
-                        X_weighted, n_clusters=int(k_est), seeds=SEEDS)
+                        X_prepared, n_clusters=int(k_est), seeds=SEEDS)
             elif method == "gmm":
                 c_est = results["N_Clusters"]
                 if isinstance(c_est, (int, np.integer)) and c_est >= 2:
                     stab = stability_ari_gmm(
-                        X_weighted,
+                        X_prepared,
                         n_components=int(c_est),
                         seeds=SEEDS,
                         covariance_type="full",
@@ -472,7 +454,7 @@ def main():
             elif method == "hdbscan":
                 # Parameters mirror your defaults in run_hdbscan_clustering()
                 stab = stability_ari_hdbscan(
-                    X_weighted,
+                    X_prepared,
                     n_rounds=HDBSCAN_BOOT_ROUNDS,
                     sample_frac=HDBSCAN_SAMPLE_FRAC,
                     seed=HDBSCAN_RANDOM_SEED,
@@ -487,7 +469,7 @@ def main():
                 if isinstance(c_est, (int, np.integer)) and c_est >= 2:
                     print("  Computing VaDE stability (this may take a few minutes)...")
                     stab = stability_ari_vade(
-                        X_weighted,
+                        X_prepared,
                         n_components=int(c_est),
                         latent_dim=10,
                         seeds=SEEDS,
@@ -553,29 +535,29 @@ def main():
         # Save results
         output_path = "output/clustering_evaluation_comparison.csv"
         comparison_df.to_csv(output_path, index=False)
-        print(f"\n✅ Results saved to: {output_path}")
+        print(f"\nResults saved to: {output_path}")
 
         # Interpretation guide
         print("\n" + "=" * 70)
         print("INTERPRETATION GUIDE")
         print("=" * 70)
         print("\nInternal Metrics (no ground truth needed):")
-        print("  • Silhouette Score [-1, 1]: HIGHER is better (>0.5 = good)")
-        print("  • Calinski-Harabasz Index: HIGHER is better")
-        print("  • Davies-Bouldin Index: LOWER is better (closer to 0)")
+        print("  - Silhouette Score [-1, 1]: HIGHER is better (>0.5 = good)")
+        print("  - Calinski-Harabasz Index: HIGHER is better")
+        print("  - Davies-Bouldin Index: LOWER is better (closer to 0)")
         print("\nExternal Metrics (compared to true genres):")
         print(
-            "  • Adjusted Rand Index [-1, 1]: HIGHER is better (1 = perfect)")
+            "  - Adjusted Rand Index [-1, 1]: HIGHER is better (1 = perfect)")
         print(
-            "  • Normalized Mutual Info [0, 1]: HIGHER is better (1 = perfect)")
+            "  - Normalized Mutual Info [0, 1]: HIGHER is better (1 = perfect)")
         print("\nRobustness:")
         print(
-            "  • Stability_ARI [0, 1]: mean ARI across multiple runs; HIGHER = more reproducible")
+            "  - Stability_ARI [0, 1]: mean ARI across multiple runs; HIGHER = more reproducible")
         print(
             "\nNote: For HDBSCAN, noise points (-1) are excluded from metric calculations.")
         print("=" * 70)
     else:
-        print("\n❌ No results to compare. Please run clustering methods first.")
+        print("\nNo results to compare. Please run clustering methods first.")
 
 
 if __name__ == "__main__":

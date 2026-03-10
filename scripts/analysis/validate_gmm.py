@@ -21,43 +21,43 @@ def validate_gmm():
     bic_path = Path("output/metrics/gmm_selection_criteria.csv")
     
     if not gmm_path.exists():
-        print("❌ GMM results file not found. Run: python src/clustering/gmm.py")
+        print("GMM results file not found. Run: python src/clustering/gmm.py")
         return False
     
     gmm_df = pd.read_csv(gmm_path)
-    print(f"\n✓ Loaded GMM results: {len(gmm_df)} samples")
+    print(f"\nLoaded GMM results: {len(gmm_df)} samples")
     
     # Check 1: Required columns
     print("\n1. COLUMN VALIDATION")
     required_cols = ['Song', 'Genre', 'Cluster', 'Confidence', 'LogLikelihood', 'PCA1', 'PCA2']
     missing = [col for col in required_cols if col not in gmm_df.columns]
     if missing:
-        print(f"   ❌ Missing columns: {missing}")
+        print(f"   Missing columns: {missing}")
         return False
-    print(f"   ✓ All required columns present: {required_cols}")
+    print(f"   All required columns present: {required_cols}")
     
     # Check 2: Data types and ranges
     print("\n2. DATA TYPE & RANGE VALIDATION")
     
     # Cluster should be integers
     if not pd.api.types.is_integer_dtype(gmm_df['Cluster']):
-        print(f"   ⚠️  Cluster column is not integer type: {gmm_df['Cluster'].dtype}")
+        print(f"   Warning: Cluster column is not integer type: {gmm_df['Cluster'].dtype}")
     else:
-        print(f"   ✓ Cluster labels are integers")
+        print(f"   Cluster labels are integers")
     
     # Confidence should be [0, 1]
     conf_min, conf_max = gmm_df['Confidence'].min(), gmm_df['Confidence'].max()
     if conf_min < 0 or conf_max > 1:
-        print(f"   ❌ Confidence out of range [0,1]: [{conf_min}, {conf_max}]")
+        print(f"   Confidence out of range [0,1]: [{conf_min}, {conf_max}]")
         return False
-    print(f"   ✓ Confidence in valid range: [{conf_min:.6f}, {conf_max:.6f}]")
+    print(f"   Confidence in valid range: [{conf_min:.6f}, {conf_max:.6f}]")
     
     # Check for NaN values
     nan_count = gmm_df.isna().sum().sum()
     if nan_count > 0:
-        print(f"   ❌ Found {nan_count} NaN values")
+        print(f"   Found {nan_count} NaN values")
         return False
-    print(f"   ✓ No NaN values found")
+    print(f"   No NaN values found")
     
     # Check 3: Cluster distribution
     print("\n3. CLUSTER DISTRIBUTION")
@@ -73,9 +73,9 @@ def validate_gmm():
     max_size = cluster_counts.max()
     min_size = cluster_counts.min()
     if max_size / min_size > 10:
-        print(f"   ⚠️  Highly unbalanced clusters (ratio: {max_size/min_size:.1f}:1)")
+        print(f"   Warning: Highly unbalanced clusters (ratio: {max_size/min_size:.1f}:1)")
     else:
-        print(f"   ✓ Reasonable cluster balance (ratio: {max_size/min_size:.1f}:1)")
+        print(f"   Reasonable cluster balance (ratio: {max_size/min_size:.1f}:1)")
     
     # Check 4: Confidence statistics
     print("\n4. CONFIDENCE STATISTICS")
@@ -88,12 +88,12 @@ def validate_gmm():
     
     # Warn if all confidences are too high (might indicate overfitting)
     if conf_stats['mean'] > 0.999:
-        print(f"   ⚠️  Very high average confidence ({conf_stats['mean']:.6f})")
+        print(f"   Warning: Very high average confidence ({conf_stats['mean']:.6f})")
         print(f"       This might indicate:")
         print(f"       - Well-separated clusters (good!)")
         print(f"       - Or overfitting (consider more clusters)")
     else:
-        print(f"   ✓ Confidence values show uncertainty (healthy)")
+        print(f"   Confidence values show uncertainty (healthy)")
     
     # Check 5: Log Likelihood
     print("\n5. LOG LIKELIHOOD STATISTICS")
@@ -107,7 +107,7 @@ def validate_gmm():
     if bic_path.exists():
         print("\n6. BIC SCORES VALIDATION")
         bic_df = pd.read_csv(bic_path)
-        print(f"   ✓ BIC scores file found with {len(bic_df)} entries")
+        print(f"   BIC scores file found with {len(bic_df)} entries")
         
         best_idx = bic_df['BIC'].idxmin()
         best_n = int(bic_df.loc[best_idx, 'Components'])
@@ -117,9 +117,9 @@ def validate_gmm():
         print(f"   Actual clusters used: {n_clusters}")
         
         if best_n != n_clusters:
-            print(f"   ⚠️  Selected {n_clusters} clusters but BIC suggests {best_n}")
+            print(f"   Warning: Selected {n_clusters} clusters but BIC suggests {best_n}")
         else:
-            print(f"   ✓ Used optimal number of components according to BIC")
+            print(f"   Used optimal number of components according to BIC")
         
         # Show BIC trend
         print(f"\n   BIC Trend:")
@@ -140,28 +140,28 @@ def validate_gmm():
     print(f"   PCA2 range: {pca2_range:.2f}")
     
     if pca1_range < 0.1 or pca2_range < 0.1:
-        print(f"   ❌ Very small PCA range - data might not be varying")
+        print(f"   Very small PCA range - data might not be varying")
         return False
-    print(f"   ✓ PCA coordinates have reasonable spread")
+    print(f"   PCA coordinates have reasonable spread")
     
     # Check 8: Compare with K-Means (if available)
     print("\n8. COMPARISON WITH K-MEANS")
-    kmeans_path = Path("output/audio_clustering_results_kmeans.csv")
+    kmeans_path = Path("output/clustering_results/audio_clustering_results_kmeans.csv")
     if kmeans_path.exists():
         kmeans_df = pd.read_csv(kmeans_path)
-        print(f"   ✓ K-Means results found for comparison")
+        print(f"   K-Means results found for comparison")
         
         if len(kmeans_df) != len(gmm_df):
-            print(f"   ❌ Different number of samples: K-Means={len(kmeans_df)}, GMM={len(gmm_df)}")
+            print(f"   Different number of samples: K-Means={len(kmeans_df)}, GMM={len(gmm_df)}")
         else:
-            print(f"   ✓ Same number of samples: {len(gmm_df)}")
+            print(f"   Same number of samples: {len(gmm_df)}")
         
         kmeans_songs = set(kmeans_df['Song'])
         gmm_songs = set(gmm_df['Song'])
         if kmeans_songs != gmm_songs:
-            print(f"   ⚠️  Different songs analyzed")
+            print(f"   Warning: Different songs analyzed")
         else:
-            print(f"   ✓ Same songs in both methods")
+            print(f"   Same songs in both methods")
         
         print(f"   K-Means clusters: {kmeans_df['Cluster'].nunique()}")
         print(f"   GMM clusters: {gmm_df['Cluster'].nunique()}")
@@ -172,18 +172,18 @@ def validate_gmm():
     print("\n" + "=" * 70)
     print("OVERALL ASSESSMENT")
     print("=" * 70)
-    print("✓ GMM implementation is CORRECT and working properly!")
+    print("GMM implementation is CORRECT and working properly!")
     print("\nKey findings:")
-    print(f"  • Successfully clustered {len(gmm_df)} songs into {n_clusters} components")
-    print(f"  • Average confidence: {conf_stats['mean']:.4f} (very high)")
-    print(f"  • All required outputs generated correctly")
-    print(f"  • Data types and ranges are valid")
+    print(f"  - Successfully clustered {len(gmm_df)} songs into {n_clusters} components")
+    print(f"  - Average confidence: {conf_stats['mean']:.4f} (very high)")
+    print(f"  - All required outputs generated correctly")
+    print(f"  - Data types and ranges are valid")
     
     if conf_stats['mean'] > 0.999 and n_clusters == 2:
-        print("\n⚠️  RECOMMENDATIONS:")
-        print("  • Very high confidence + only 2 clusters suggests well-separated data")
-        print("  • Consider trying more clusters (3-5) for finer groupings")
-        print("  • The BIC score pattern shows better fit with more components")
+        print("\nRECOMMENDATIONS:")
+        print("  - Very high confidence + only 2 clusters suggests well-separated data")
+        print("  - Consider trying more clusters (3-5) for finer groupings")
+        print("  - The BIC score pattern shows better fit with more components")
     
     print("\n" + "=" * 70)
     return True

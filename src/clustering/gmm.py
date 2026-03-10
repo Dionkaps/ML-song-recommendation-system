@@ -5,10 +5,8 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
-from sklearn.decomposition import PCA
 from sklearn.mixture import GaussianMixture
-from sklearn.preprocessing import StandardScaler
-from tqdm import tqdm
+from sklearn.metrics import silhouette_score
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent.parent
@@ -18,11 +16,9 @@ if str(PROJECT_ROOT) not in sys.path:
 from config import feature_vars as fv  # noqa: E402
 from src.ui.modern_ui import launch_ui  # noqa: E402
 from src.clustering.kmeans import (  # noqa: E402
-    _collect_feature_vectors,
-    _load_genre_mapping,
-    build_group_weights,
     compute_cluster_range,
-    prepare_features,
+    compute_visualization_coords,
+    load_clustering_dataset,
 )
 from joblib import Parallel, delayed
 
@@ -36,15 +32,22 @@ def _select_components(
     tol: float,
     init_params: str,
     reg_covar: float = 1e-6,
-    n_jobs: int = -1,
-) -> Tuple[int, GaussianMixture, List[float], List[float]]:
-    """Pick the component count that minimises BIC (also tracks AIC).
-    
-    Uses parallel processing to evaluate multiple component counts simultaneously.
+    n_jobs: int = 1,
+) -> Tuple[int, GaussianMixture, List[float], List[float], List[float]]:
+    """Pick the component count with BIC as the primary criterion.
+
+    BIC is the correct model-selection metric for Gaussian mixtures.
+    When multiple models are within a weak-evidence BIC band, prefer the one
+    with the best silhouette score to avoid selecting needlessly fragmented
+    mixtures. Uses parallel processing across candidate counts.
     """
-    
-    def evaluate_n(n: int) -> Tuple[int, float, float, bool, Optional[GaussianMixture]]:
-        """Evaluate BIC/AIC for a single n value."""
+
+    sample_size = min(5000, data.shape[0])
+
+    def evaluate_n(
+        n: int,
+    ) -> Tuple[int, float, float, float, bool, Optional[GaussianMixture]]:
+        """Evaluate BIC/AIC and cluster separation for a single n value."""
         try:
             model = GaussianMixture(
                 n_components=n,
@@ -58,42 +61,65 @@ def _select_components(
             model.fit(data)
             bic = model.bic(data)
             aic = model.aic(data)
-            return n, bic, aic, model.converged_, model
+            labels = model.predict(data)
+            unique_labels = np.unique(labels)
+            silhouette = float("nan")
+            if len(unique_labels) > 1 and len(unique_labels) < len(data):
+                silhouette_kwargs = {"random_state": 42}
+                if sample_size < len(data):
+                    silhouette_kwargs["sample_size"] = sample_size
+                silhouette = float(silhouette_score(data, labels, **silhouette_kwargs))
+            return n, bic, aic, silhouette, model.converged_, model
         except ValueError:
-            return n, float('inf'), float('inf'), False, None
+            return n, float("inf"), float("inf"), float("nan"), False, None
     
-    print(f"Finding optimal GMM components ({min_components}-{max_components}) with parallel processing...")
+    print(f"Finding optimal GMM components ({min_components}-{max_components})...")
     
     # Parallel evaluation of all component counts
     n_values = list(range(min_components, max_components + 1))
-    results = Parallel(n_jobs=n_jobs, verbose=1)(
-        delayed(evaluate_n)(n) for n in n_values
-    )
+    if n_jobs == 1:
+        results = [evaluate_n(n) for n in n_values]
+    else:
+        results = Parallel(n_jobs=n_jobs, verbose=1, prefer="threads")(
+            delayed(evaluate_n)(n) for n in n_values
+        )
     
     # Process results
     best_n = min_components
     best_model: Optional[GaussianMixture] = None
-    best_bic = float('inf')
     bic_scores: List[float] = []
     aic_scores: List[float] = []
-    
-    for n, bic, aic, converged, model in sorted(results, key=lambda x: x[0]):
+    silhouette_scores: List[float] = []
+    converged_rows = []
+
+    for n, bic, aic, silhouette, converged, model in sorted(results, key=lambda x: x[0]):
         bic_scores.append(bic)
         aic_scores.append(aic)
-        if converged and bic < best_bic:
-            best_bic = bic
-            best_n = n
-            best_model = model
+        silhouette_scores.append(silhouette)
+        if converged and model is not None:
+            converged_rows.append((n, bic, aic, silhouette, model))
 
-    if best_model is None:
+    if not converged_rows:
         raise RuntimeError("Failed to fit any GaussianMixture models during selection.")
 
-    return best_n, best_model, bic_scores, aic_scores
+    best_bic = min(row[1] for row in converged_rows)
+    bic_tolerance = 10.0
+    candidate_rows = [row for row in converged_rows if row[1] <= best_bic + bic_tolerance]
+    best_n, _, _, _, best_model = min(
+        candidate_rows,
+        key=lambda row: (
+            -np.nan_to_num(row[3], nan=-1.0),
+            row[1],
+            row[0],
+        ),
+    )
+
+    return best_n, best_model, bic_scores, aic_scores, silhouette_scores
 
 
 def run_gmm_clustering(
     audio_dir: str = "audio_files",
-    results_dir: str = "output/results",
+    results_dir: str = "output/features",
     n_components: int = 5,
     covariance_type: str = "full",
     max_iter: int = 200,
@@ -111,52 +137,40 @@ def run_gmm_clustering(
 ):
     os.makedirs(results_dir, exist_ok=True)
     
-    # Auto-detect songs.csv path if not provided
-    if songs_csv_path is None:
-        songs_csv_path = "data/songs.csv"
-
-    genre_map, unique_genres = _load_genre_mapping(audio_dir, results_dir, include_genre)
-    file_names, feature_vectors, genres = _collect_feature_vectors(
-        results_dir, genre_map, unique_genres, include_genre, include_msd, songs_csv_path
-    )
-
-    if not feature_vectors:
-        raise RuntimeError("No songs with complete feature files were found.")
-
-    X_all = np.vstack(feature_vectors)
-    
-    # Use the unified feature preparation (PCA per group or weighted)
-    X_prepared = prepare_features(
-        X_all,
+    file_names, genres, unique_genres, X_prepared = load_clustering_dataset(
+        audio_dir=audio_dir,
+        results_dir=results_dir,
         n_mfcc=n_mfcc,
         n_mels=n_mels,
-        n_genres=len(unique_genres),
         include_genre=include_genre,
         include_msd=include_msd,
+        songs_csv_path=songs_csv_path,
     )
 
     model: Optional[GaussianMixture] = None
     selected_components = n_components
     bic_scores: Optional[List[float]] = None
     aic_scores: Optional[List[float]] = None
+    silhouette_scores: Optional[List[float]] = None
 
     if dynamic_component_selection:
         n_samples = X_prepared.shape[0]
         
         # Compute data-driven component range if not explicitly provided
-        auto_min, auto_max = compute_cluster_range(n_samples, len(unique_genres))
+        genre_count_hint = len(unique_genres) if include_genre else 0
+        auto_min, auto_max = compute_cluster_range(n_samples, genre_count_hint)
         min_comp = dynamic_min_components if dynamic_min_components is not None else auto_min
         max_comp = dynamic_max_components if dynamic_max_components is not None else auto_max
         
         # Additional cap for GMM stability with full covariance
         if covariance_type == 'full':
             max_stable = X_prepared.shape[0] // 20
-            max_comp = min(max_comp, max_stable)
+            max_comp = max(min_comp, min(max_comp, max_stable))
         
         print(f"Dynamic component selection: searching n in [{min_comp}, {max_comp}]")
-        print(f"  (Based on {n_samples} samples and {len(unique_genres)} genres)")
+        print(f"  (Based on {n_samples} samples)")
 
-        selected_components, model, bic_scores, aic_scores = _select_components(
+        selected_components, model, bic_scores, aic_scores, silhouette_scores = _select_components(
             X_prepared,
             min_comp,
             max_comp,
@@ -187,7 +201,7 @@ def run_gmm_clustering(
     probabilities = model.predict_proba(X_prepared).max(axis=1)
     log_probs = model.score_samples(X_prepared)
 
-    coords = PCA(n_components=2, random_state=42).fit_transform(X_prepared)
+    coords = compute_visualization_coords(X_prepared)
 
     df = pd.DataFrame(
         {
@@ -206,18 +220,19 @@ def run_gmm_clustering(
     output_dir.mkdir(parents=True, exist_ok=True)
     metrics_dir.mkdir(parents=True, exist_ok=True)
 
-    if bic_scores is not None and aic_scores is not None:
-        min_comp = dynamic_min_components if dynamic_min_components is not None else 2
+    if bic_scores is not None and aic_scores is not None and silhouette_scores is not None:
+        min_comp = dynamic_min_components if dynamic_min_components is not None else auto_min
         selection_df = pd.DataFrame(
             {
                 "Components": list(range(min_comp, min_comp + len(bic_scores))),
                 "BIC": bic_scores,
                 "AIC": aic_scores,
+                "Silhouette": silhouette_scores,
             }
         )
         selection_path = metrics_dir / "gmm_selection_criteria.csv"
         selection_df.to_csv(selection_path, index=False)
-        print(f"Stored BIC/AIC diagnostics -> {selection_path}")
+        print(f"Stored GMM selection diagnostics -> {selection_path}")
 
     csv_path = output_dir / "audio_clustering_results_gmm.csv"
     df.to_csv(csv_path, index=False)

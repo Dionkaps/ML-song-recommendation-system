@@ -1,9 +1,10 @@
 import os
 import glob
 import multiprocessing
+import tempfile
 import time
 import warnings
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from pathlib import Path
 import sys
 from tqdm import tqdm
@@ -16,10 +17,14 @@ import librosa
 import numpy as np
 import contextlib
 import io
+import soundfile as sf
 
 # Suppress specific warnings
 warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", category=FutureWarning)
+
+FEATURE_KEYS = tuple(fv.AUDIO_FEATURE_KEYS)
+DEFAULT_MAX_WORKERS = 8
 
 @contextlib.contextmanager
 def suppress_stderr():
@@ -107,15 +112,17 @@ def extract_beat_strength(y, sr, hop_length=fv.hop_length):
     Extract beat strength / onset rate features.
     Returns tempo (BPM) and mean onset strength as a combined feature.
     """
-    # Get tempo and beat frames
-    tempo, beat_frames = librosa.beat.beat_track(y=y, sr=sr, hop_length=hop_length)
-    
-    # Get onset strength envelope
+    # Build rhythmic descriptors from the onset envelope directly.
+    # This avoids librosa.beat.beat_track(), which is unstable in this environment.
     onset_env = librosa.onset.onset_strength(y=y, sr=sr, hop_length=hop_length)
+    tempo_values = librosa.feature.tempo(
+        onset_envelope=onset_env,
+        sr=sr,
+        hop_length=hop_length,
+    )
     
     # Calculate statistics
-    if isinstance(tempo, np.ndarray):
-        tempo = float(tempo[0]) if len(tempo) > 0 else 0.0
+    tempo = float(tempo_values[0]) if len(tempo_values) > 0 else 0.0
     
     mean_onset_strength = float(np.mean(onset_env))
     std_onset_strength = float(np.std(onset_env))
@@ -128,6 +135,49 @@ def extract_beat_strength(y, sr, hop_length=fv.hop_length):
     # Return as 2D array [4 features, 1 frame] for consistency
     # Features: tempo, mean_onset_strength, std_onset_strength, onset_rate
     return np.array([[tempo], [mean_onset_strength], [std_onset_strength], [onset_rate]])
+
+
+def get_feature_output_paths(base_filename, results_dir):
+    """Return the expected feature bundle paths for one song basename."""
+    return {
+        key: os.path.join(results_dir, f"{base_filename}_{key}.npy")
+        for key in FEATURE_KEYS
+    }
+
+
+def has_complete_feature_bundle(base_filename, results_dir):
+    """Check whether all expected feature files already exist for one song."""
+    return all(
+        os.path.isfile(path)
+        for path in get_feature_output_paths(base_filename, results_dir).values()
+    )
+
+
+def save_array_atomic(output_path, array):
+    """Write a .npy file via a temporary path so interrupted runs can resume safely."""
+    file_descriptor, temp_path = tempfile.mkstemp(
+        dir=os.path.dirname(output_path),
+        suffix=".npy",
+    )
+    os.close(file_descriptor)
+    try:
+        np.save(temp_path, array)
+        os.replace(temp_path, output_path)
+    finally:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+
+
+def load_audio(audio_path):
+    """Load audio as mono float32 while preferring direct WAV reads after preprocessing."""
+    if Path(audio_path).suffix.lower() == ".wav":
+        y, sr = sf.read(audio_path, always_2d=False)
+        if isinstance(y, np.ndarray) and y.ndim > 1:
+            y = np.mean(y, axis=1)
+        return np.asarray(y, dtype=np.float32), sr
+
+    y, sr = librosa.load(audio_path, sr=None)
+    return y, sr
 
 
 def process_file(audio_path, results_dir, n_mfcc, n_fft, hop_length, n_mels):
@@ -148,11 +198,13 @@ def process_file(audio_path, results_dir, n_mfcc, n_fft, hop_length, n_mels):
     """
     filename = os.path.basename(audio_path)
     base_filename = os.path.splitext(filename)[0]
+    output_paths = get_feature_output_paths(base_filename, results_dir)
+
+    if has_complete_feature_bundle(base_filename, results_dir):
+        return {"base_name": base_filename, "status": "skipped"}
     
     try:
-        # Suppress stderr output during audio loading to hide mpg123 warnings
-        with suppress_stderr():
-            y, sr = librosa.load(audio_path, sr=None)
+        y, sr = load_audio(audio_path)
             
         # Extract MFCC and derivatives
         mfccs = extract_mfcc(y, sr, n_mfcc)
@@ -170,24 +222,38 @@ def process_file(audio_path, results_dir, n_mfcc, n_fft, hop_length, n_mels):
         chroma = extract_chroma(y, sr, hop_length, n_fft)
         beat_strength = extract_beat_strength(y, sr, hop_length)
 
-        # Save all features
-        np.save(os.path.join(results_dir, f"{base_filename}_mfcc.npy"), mfccs)
-        np.save(os.path.join(results_dir, f"{base_filename}_delta_mfcc.npy"), delta_mfcc)
-        np.save(os.path.join(results_dir, f"{base_filename}_delta2_mfcc.npy"), delta2_mfcc)
-        np.save(os.path.join(results_dir, f"{base_filename}_spectral_centroid.npy"), spec_centroid)
-        np.save(os.path.join(results_dir, f"{base_filename}_spectral_rolloff.npy"), spec_rolloff)
-        np.save(os.path.join(results_dir, f"{base_filename}_spectral_flux.npy"), spec_flux)
-        np.save(os.path.join(results_dir, f"{base_filename}_spectral_flatness.npy"), spec_flatness)
-        np.save(os.path.join(results_dir, f"{base_filename}_zero_crossing_rate.npy"), zcr)
-        np.save(os.path.join(results_dir, f"{base_filename}_chroma.npy"), chroma)
-        np.save(os.path.join(results_dir, f"{base_filename}_beat_strength.npy"), beat_strength)
+        feature_arrays = {
+            "mfcc": mfccs,
+            "delta_mfcc": delta_mfcc,
+            "delta2_mfcc": delta2_mfcc,
+            "spectral_centroid": spec_centroid,
+            "spectral_rolloff": spec_rolloff,
+            "spectral_flux": spec_flux,
+            "spectral_flatness": spec_flatness,
+            "zero_crossing_rate": zcr,
+            "chroma": chroma,
+            "beat_strength": beat_strength,
+        }
 
-        return base_filename
+        for key, array in feature_arrays.items():
+            save_array_atomic(output_paths[key], array)
+
+        return {"base_name": base_filename, "status": "processed"}
     except Exception as e:
-        return None
+        return {
+            "base_name": base_filename,
+            "status": "failed",
+            "error": str(e),
+        }
 
 
-def run_feature_extraction(audio_dir='audio_files', results_dir='output/features'):
+def run_feature_extraction(
+    audio_dir='audio_files',
+    results_dir='output/features',
+    workers=None,
+    executor_type='auto',
+    resume=True,
+):
     """
     Finds all audio files (.wav, .mp3, .flac, .m4a) in audio_dir and processes them in parallel.
     Works with flat directory structure - genre info comes from unified songs.csv.
@@ -205,29 +271,75 @@ def run_feature_extraction(audio_dir='audio_files', results_dir='output/features
     for ext in audio_extensions:
         found = glob.glob(os.path.join(audio_dir, ext))
         audio_files.extend(found)
+    audio_files = sorted(set(audio_files))
     
     if not audio_files:
         print(f"No audio files found in {audio_dir}.")
         print(f"Searched for extensions: {', '.join(audio_extensions)}")
-        return
-    
+        return {
+            "total_audio_files": 0,
+            "processed": 0,
+            "skipped": 0,
+            "failed": 0,
+            "results_dir": results_dir,
+        }
+
+    pending_audio_files = []
+    skipped_existing = 0
+    for audio_path in audio_files:
+        base_filename = os.path.splitext(os.path.basename(audio_path))[0]
+        if resume and has_complete_feature_bundle(base_filename, results_dir):
+            skipped_existing += 1
+            continue
+        pending_audio_files.append(audio_path)
+
     print(f"\n{'='*60}")
     print(f"Feature Extraction Started")
     print(f"{'='*60}")
     print(f"Audio directory: {audio_dir}")
     print(f"Results directory: {results_dir}")
     print(f"Found {len(audio_files)} audio files")
+    print(f"Already complete: {skipped_existing}")
+    print(f"Pending extraction: {len(pending_audio_files)}")
     print(f"{'='*60}\n")
 
-    # Determine number of worker processes
-    num_workers = min(len(audio_files), multiprocessing.cpu_count())
-    print(f"Starting parallel processing with {num_workers} workers...\n")
+    if not pending_audio_files:
+        print("All audio files already have complete feature bundles.\n")
+        print("NOTE: Genre and MSD metadata are loaded from unified data/songs.csv")
+        print("      Use genre_mapper.py utility to map features to genres.")
+        return {
+            "total_audio_files": len(audio_files),
+            "processed": 0,
+            "skipped": skipped_existing,
+            "failed": 0,
+            "results_dir": results_dir,
+        }
 
-    # Use ProcessPoolExecutor for CPU-bound tasks
+    if executor_type == 'auto':
+        executor_type = 'thread' if os.name == 'nt' else 'process'
+    executor_type = executor_type.lower()
+    if executor_type not in {'thread', 'process'}:
+        raise ValueError("executor_type must be one of: auto, thread, process")
+
+    cpu_count = multiprocessing.cpu_count()
+    default_workers = min(
+        len(pending_audio_files),
+        DEFAULT_MAX_WORKERS if executor_type == 'thread' else cpu_count,
+    )
+    num_workers = default_workers if workers is None else int(workers)
+    num_workers = max(1, min(num_workers, len(pending_audio_files)))
+    executor_cls = ThreadPoolExecutor if executor_type == 'thread' else ProcessPoolExecutor
+
+    print(
+        f"Starting parallel processing with {num_workers} {executor_type} "
+        f"{'worker' if num_workers == 1 else 'workers'}...\n"
+    )
+
     processed_count = 0
     failed_count = 0
-    
-    with ProcessPoolExecutor(max_workers=num_workers) as executor:
+    failed_files = []
+
+    with executor_cls(max_workers=num_workers) as executor:
         futures = {
             executor.submit(
                 process_file,
@@ -238,31 +350,61 @@ def run_feature_extraction(audio_dir='audio_files', results_dir='output/features
                 fv.hop_length,
                 fv.n_mels
             ): audio_path
-            for audio_path in audio_files
+            for audio_path in pending_audio_files
         }
         
         # Wait for all to complete with progress bar
-        pbar = tqdm(as_completed(futures), total=len(futures),
-                    desc="Extracting features", unit="file")
+        pbar = tqdm(
+            as_completed(futures),
+            total=len(futures),
+            desc="Extracting features",
+            unit="file",
+            file=sys.stdout,
+        )
         for future in pbar:
             result = future.result()
-            if result:
+            if result["status"] == "processed":
                 processed_count += 1
+            elif result["status"] == "skipped":
+                skipped_existing += 1
             else:
                 failed_count += 1
-            pbar.set_postfix(success=processed_count, failed=failed_count)
+                failed_files.append(result)
+            pbar.set_postfix(
+                success=processed_count,
+                skipped=skipped_existing,
+                failed=failed_count,
+            )
     
     print(f"\n{'='*60}")
     print(f"Feature Extraction Complete")
     print(f"{'='*60}")
+    print(f"Total audio files: {len(audio_files)}")
     print(f"Successfully processed: {processed_count} files")
+    print(f"Skipped existing: {skipped_existing} files")
     print(f"Failed: {failed_count} files")
     print(f"Results saved to: {results_dir}")
     print(f"{'='*60}\n")
+
+    if failed_files:
+        failure_log_path = os.path.join(results_dir, "feature_extraction_failures.txt")
+        with open(failure_log_path, "w", encoding="utf-8") as failure_log:
+            for item in failed_files:
+                failure_log.write(
+                    f"{item['base_name']}\t{item['error']}\n"
+                )
+        print(f"Failure log saved to: {failure_log_path}\n")
     
     # Note about genre mapping
     print("NOTE: Genre and MSD metadata are loaded from unified data/songs.csv")
     print("      Use genre_mapper.py utility to map features to genres.")
+    return {
+        "total_audio_files": len(audio_files),
+        "processed": processed_count,
+        "skipped": skipped_existing,
+        "failed": failed_count,
+        "results_dir": results_dir,
+    }
 
 
 def main():

@@ -26,14 +26,24 @@ Example:
 from .processor import AudioPreprocessor
 from .duration_handler import DurationHandler
 from .loudness_normalizer import LoudnessNormalizer
-from .loudness_scanner import LoudnessScanner, ScanResult, DistributionAnalysis
+
+try:
+    from .loudness_scanner import LoudnessScanner, ScanResult, DistributionAnalysis
+except ModuleNotFoundError:
+    LoudnessScanner = None
+    ScanResult = None
+    DistributionAnalysis = None
 
 __all__ = [
     'AudioPreprocessor', 
     'DurationHandler', 
     'LoudnessNormalizer',
-    'LoudnessScanner',
-    'ScanResult',
-    'DistributionAnalysis'
 ]
+
+if LoudnessScanner is not None:
+    __all__.extend([
+        'LoudnessScanner',
+        'ScanResult',
+        'DistributionAnalysis',
+    ])
 

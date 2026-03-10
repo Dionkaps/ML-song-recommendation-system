@@ -13,9 +13,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, TensorDataset
 
-from sklearn.decomposition import PCA
 from sklearn.mixture import GaussianMixture
-from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import silhouette_score
 
 # -----------------------------------------------------------------------------
 # Project imports (reuse existing helpers & config just like kmeans.py/gmm.py)
@@ -24,11 +23,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from config import feature_vars as fv  # noqa: E402
 from src.ui.modern_ui import launch_ui  # noqa: E402
 from src.clustering.kmeans import (  # noqa: E402
-    _collect_feature_vectors,
-    _load_genre_mapping,
-    build_group_weights,
     compute_cluster_range,
-    prepare_features,
+    compute_visualization_coords,
+    load_clustering_dataset,
 )
 
 
@@ -50,8 +47,8 @@ def _select_optimal_components_bic(
     X: np.ndarray,
     min_components: int = 2,
     max_components: int = 15,
-    n_jobs: int = -1,
-) -> Tuple[int, List[float]]:
+    n_jobs: int = 1,
+) -> Tuple[int, List[float], List[float]]:
     """
     Select optimal number of components using BIC on a GMM fit.
     
@@ -68,17 +65,19 @@ def _select_optimal_components_bic(
         n_jobs: Number of parallel jobs (-1 = all cores)
         
     Returns:
-        Tuple of (optimal_n_components, list_of_bic_scores)
+        Tuple of (optimal_n_components, list_of_bic_scores, list_of_silhouette_scores)
     """
     # Cap max components based on data size to avoid numerical issues
     n_samples = X.shape[0]
     max_sensible = min(max_components, n_samples // 10, 30)
     if max_components > max_sensible:
         print(f"  Capping max components from {max_components} to {max_sensible} (based on data size)")
-        max_components = max_sensible
+        max_components = max(min_components, max_sensible)
     
-    def evaluate_n(n: int) -> Tuple[int, float, bool]:
-        """Evaluate BIC for a single n value."""
+    sample_size = min(5000, X.shape[0])
+
+    def evaluate_n(n: int) -> Tuple[int, float, float, bool]:
+        """Evaluate latent-space BIC and silhouette for a single n value."""
         try:
             gmm = GaussianMixture(
                 n_components=n,
@@ -89,31 +88,57 @@ def _select_optimal_components_bic(
             )
             gmm.fit(X)
             bic = gmm.bic(X)
-            return n, bic, gmm.converged_
+            labels = gmm.predict(X)
+            unique_labels = np.unique(labels)
+            silhouette = float("nan")
+            if len(unique_labels) > 1 and len(unique_labels) < len(X):
+                silhouette_kwargs = {"random_state": 42}
+                if sample_size < len(X):
+                    silhouette_kwargs["sample_size"] = sample_size
+                silhouette = float(silhouette_score(X, labels, **silhouette_kwargs))
+            return n, bic, silhouette, gmm.converged_
         except Exception:
-            return n, float('inf'), False
+            return n, float("inf"), float("nan"), False
     
-    print(f"Searching for optimal number of components ({min_components}-{max_components}) with parallel processing...")
+    print(f"Searching for optimal number of components ({min_components}-{max_components})...")
     
     # Parallel evaluation
     n_values = list(range(min_components, max_components + 1))
-    results = Parallel(n_jobs=n_jobs, verbose=1)(
-        delayed(evaluate_n)(n) for n in n_values
-    )
+    if n_jobs == 1:
+        results = [evaluate_n(n) for n in n_values]
+    else:
+        results = Parallel(n_jobs=n_jobs, verbose=1, prefer="threads")(
+            delayed(evaluate_n)(n) for n in n_values
+        )
     
     # Process results
     best_n = min_components
     best_bic = float('inf')
     bic_scores: List[float] = []
-    
-    for n, bic, converged in sorted(results, key=lambda x: x[0]):
+    silhouette_scores: List[float] = []
+    converged_rows = []
+
+    for n, bic, silhouette, converged in sorted(results, key=lambda x: x[0]):
         bic_scores.append(bic)
-        if converged and bic < best_bic:
-            best_bic = bic
-            best_n = n
-    
-    print(f"Optimal components (BIC) -> {best_n} (BIC={best_bic:.2f})")
-    return best_n, bic_scores
+        silhouette_scores.append(silhouette)
+        if converged:
+            converged_rows.append((n, bic, silhouette))
+
+    if converged_rows:
+        best_bic = min(row[1] for row in converged_rows)
+        bic_tolerance = 10.0
+        candidate_rows = [row for row in converged_rows if row[1] <= best_bic + bic_tolerance]
+        best_n = min(
+            candidate_rows,
+            key=lambda row: (
+                -np.nan_to_num(row[2], nan=-1.0),
+                row[1],
+                row[0],
+            ),
+        )[0]
+
+    print(f"Optimal components (latent BIC) -> {best_n} (BIC={best_bic:.2f})")
+    return best_n, bic_scores, silhouette_scores
 
 
 def _select_optimal_components_latent(
@@ -121,7 +146,7 @@ def _select_optimal_components_latent(
     X: np.ndarray,
     min_components: int = 2,
     max_components: int = 15,
-) -> Tuple[int, List[float]]:
+) -> Tuple[int, List[float], List[float]]:
     """
     Select optimal number of components using BIC on the LATENT space.
     
@@ -135,7 +160,7 @@ def _select_optimal_components_latent(
         max_components: Maximum number of components to try
         
     Returns:
-        Tuple of (optimal_n_components, list_of_bic_scores)
+        Tuple of (optimal_n_components, list_of_bic_scores, list_of_silhouette_scores)
     """
     model.eval()
     device = next(model.parameters()).device
@@ -501,39 +526,26 @@ def run_vade_clustering(
     """
     os.makedirs(results_dir, exist_ok=True)
     set_seed(42)
-    
-    # Auto-detect songs.csv path if not provided
-    if songs_csv_path is None:
-        songs_csv_path = "data/songs.csv"
 
     # -------------------------
     # Assemble feature matrix X
     # -------------------------
-    genre_map, unique_genres = _load_genre_mapping(audio_dir, results_dir, include_genre)
-    file_names, feature_vectors, genres = _collect_feature_vectors(
-        results_dir, genre_map, unique_genres, include_genre, include_msd, songs_csv_path
-    )
-
-    if not feature_vectors:
-        raise RuntimeError("No songs with complete feature files were found.")
-
-    X_all = np.vstack(feature_vectors).astype(np.float32)
-
-    # Use the unified feature preparation (PCA per group or weighted)
-    X_prepared = prepare_features(
-        X_all,
+    file_names, genres, unique_genres, X_prepared = load_clustering_dataset(
+        audio_dir=audio_dir,
+        results_dir=results_dir,
         n_mfcc=n_mfcc,
         n_mels=n_mels,
-        n_genres=len(unique_genres),
         include_genre=include_genre,
         include_msd=include_msd,
+        songs_csv_path=songs_csv_path,
     )
 
     # -------------------------
     # Compute data-driven component range
     # -------------------------
     n_samples = X_prepared.shape[0]
-    auto_min, auto_max = compute_cluster_range(n_samples, len(unique_genres))
+    genre_count_hint = len(unique_genres) if include_genre else 0
+    auto_min, auto_max = compute_cluster_range(n_samples, genre_count_hint)
     min_comp = dynamic_min_components if dynamic_min_components is not None else auto_min
     max_comp = dynamic_max_components if dynamic_max_components is not None else auto_max
     
@@ -586,13 +598,14 @@ def run_vade_clustering(
     # -------------------------
     selected_components = n_components
     bic_scores: Optional[List[float]] = None
+    silhouette_scores: Optional[List[float]] = None
     
     if dynamic_component_selection:
         print(f"\nStep 2: Selecting optimal components in LATENT space...")
-        print(f"  Search range: [{min_comp}, {max_comp}] (based on {n_samples} samples, {len(unique_genres)} genres)")
+        print(f"  Search range: [{min_comp}, {max_comp}] (based on {n_samples} samples)")
         
         # Run BIC on the LATENT space (after pretraining)
-        selected_components, bic_scores = _select_optimal_components_latent(
+        selected_components, bic_scores, silhouette_scores = _select_optimal_components_latent(
             pretrain_model, X_prepared, min_comp, max_comp
         )
         print(f"Using {selected_components} components (dynamically selected via BIC in latent space)")
@@ -656,9 +669,9 @@ def run_vade_clustering(
         f"avg confidence: {confidence.mean():.2f}"
     )
 
-    # 2D coords (for UI) using PCA on latent space (more meaningful for VaDE)
-    # since clustering happens in latent space, visualize that space
-    coords = PCA(n_components=2, random_state=42).fit_transform(ZMU)
+    # Use the same prepared-feature projection as the other clustering methods
+    # so downstream comparisons and plots share a common 2D basis.
+    coords = compute_visualization_coords(X_prepared)
 
     df = pd.DataFrame(
         {
@@ -682,14 +695,15 @@ def run_vade_clustering(
     metrics_dir.mkdir(parents=True, exist_ok=True)
     
     # Save BIC scores if available
-    if bic_scores is not None:
+    if bic_scores is not None and silhouette_scores is not None:
         selection_df = pd.DataFrame({
             "Components": list(range(min_comp, min_comp + len(bic_scores))),
             "BIC": bic_scores,
+            "LatentSilhouette": silhouette_scores,
         })
         selection_path = metrics_dir / "vade_selection_criteria.csv"
         selection_df.to_csv(selection_path, index=False)
-        print(f"Stored BIC diagnostics -> {selection_path}")
+        print(f"Stored VaDE selection diagnostics -> {selection_path}")
     
     csv_path = output_dir / "audio_clustering_results_vade.csv"
     df.to_csv(csv_path, index=False)

@@ -235,6 +235,70 @@ def save_checkpoint(checkpoint_data):
         print(f"Error saving checkpoint: {e}")
 
 
+def reconcile_checkpoint_with_audio(checkpoint, songs_list):
+    """
+    Keep only checkpoint entries that still have audio files on disk.
+
+    This prevents a stale checkpoint from skipping downloads after the
+    `audio_files/` directory has been deleted or partially cleaned.
+    """
+    audio_dir = Path(DEEZE_AUDIO_FOLDER)
+    if not audio_dir.exists():
+        print("Audio directory is missing; ignoring previous checkpoint state.")
+        return {'processed_indices': [], 'downloaded_songs': []}
+
+    existing_basenames = {
+        path.stem
+        for path in audio_dir.iterdir()
+        if path.is_file() and path.suffix.lower() in {".mp3", ".wav", ".flac", ".m4a"}
+    }
+    if not existing_basenames:
+        print("Audio directory is empty; ignoring previous checkpoint state.")
+        return {'processed_indices': [], 'downloaded_songs': []}
+
+    track_id_to_index = {
+        song.get('track_id'): song.get('index', -1)
+        for song in songs_list
+        if song.get('track_id')
+    }
+    title_artist_to_index = {
+        (song.get('title', '').strip().lower(), song.get('artist', '').strip().lower()): song.get('index', -1)
+        for song in songs_list
+    }
+
+    valid_downloaded = []
+    valid_processed = set()
+
+    for song in checkpoint.get('downloaded_songs', []):
+        filename = song.get('filename')
+        if not filename or Path(filename).stem not in existing_basenames:
+            continue
+
+        valid_downloaded.append(song)
+        msd_track_id = song.get('msd_track_id')
+        idx = track_id_to_index.get(msd_track_id)
+        if idx is None:
+            lookup_key = (
+                str(song.get('msd_title', '')).strip().lower(),
+                str(song.get('msd_artist', '')).strip().lower(),
+            )
+            idx = title_artist_to_index.get(lookup_key)
+        if idx is not None and idx >= 0:
+            valid_processed.add(idx)
+
+    dropped = len(checkpoint.get('downloaded_songs', [])) - len(valid_downloaded)
+    if dropped > 0:
+        print(
+            f"Checkpoint/audio mismatch detected: dropped {dropped} stale checkpoint entries "
+            f"that no longer exist in {DEEZE_AUDIO_FOLDER}/"
+        )
+
+    return {
+        'processed_indices': sorted(valid_processed),
+        'downloaded_songs': valid_downloaded,
+    }
+
+
 def create_download_statistics_graphs(total_songs, downloaded_count, failed_count, elapsed_time):
     """Create visualization graphs for download statistics"""
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -242,7 +306,9 @@ def create_download_statistics_graphs(total_songs, downloaded_count, failed_coun
     os.makedirs(output_dir, exist_ok=True)
     
     # Prepare data
-    not_found = total_songs - downloaded_count - failed_count
+    downloaded_count = max(0, downloaded_count)
+    failed_count = max(0, failed_count)
+    not_found = max(0, total_songs - downloaded_count - failed_count)
     success_rate = (downloaded_count / total_songs * 100) if total_songs > 0 else 0
     failed_rate = (failed_count / total_songs * 100) if total_songs > 0 else 0
     not_found_rate = (not_found / total_songs * 100) if total_songs > 0 else 0
@@ -364,10 +430,30 @@ def update_unified_csv(downloaded_songs):
     if not os.path.exists(UNIFIED_CSV):
         print(f"Warning: Unified CSV not found at {UNIFIED_CSV}")
         print("Creating new unified CSV from download data...")
-        # Fallback: create basic CSV if unified doesn't exist
+        # Build CSV using explicit field names (dict insertion order is not stable enough).
         df = pd.DataFrame(downloaded_songs)
-        df.columns = ['deezer_title', 'deezer_artist', 'filename', 'genre', 'msd_artist', 'msd_title', 'msd_track_id']
-        df['has_audio'] = True
+        expected_columns = [
+            "deezer_title",
+            "deezer_artist",
+            "filename",
+            "genre",
+            "msd_artist",
+            "msd_title",
+            "msd_track_id",
+        ]
+
+        # Backward compatibility if older keys are present.
+        if "deezer_title" not in df.columns and "title" in df.columns:
+            df["deezer_title"] = df["title"]
+        if "deezer_artist" not in df.columns and "artist" in df.columns:
+            df["deezer_artist"] = df["artist"]
+
+        for col in expected_columns:
+            if col not in df.columns:
+                df[col] = ""
+
+        df = df[expected_columns].copy()
+        df["has_audio"] = True
         df.to_csv(UNIFIED_CSV, index=False)
         return
     
@@ -494,6 +580,7 @@ def main():
 
     # Load checkpoint
     checkpoint = load_checkpoint()
+    checkpoint = reconcile_checkpoint_with_audio(checkpoint, songs_list)
     processed_indices = set(checkpoint.get('processed_indices', []))
     
     # Filter out already processed songs
@@ -645,7 +732,7 @@ def main():
     print("="*50)
     
     # Calculate total failed (including previous sessions)
-    total_failed = len(processed_indices) - success_count
+    total_failed = max(0, len(processed_indices) - success_count)
     create_download_statistics_graphs(total_count, success_count, total_failed, elapsed)
     
     if len(processed_indices) < total_count:

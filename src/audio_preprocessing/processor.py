@@ -186,7 +186,18 @@ class AudioPreprocessor:
             result['actions'].extend(norm_stats['actions'])
 
             # 4. Save File
-            sf.write(path, y, sr)
+            if path.suffix.lower() == '.wav':
+                output_path = path
+            else:
+                output_path = path.with_suffix('.wav')
+
+            sf.write(str(output_path), y, sr, subtype='PCM_16')
+
+            if output_path != path and path.exists():
+                path.unlink()
+                result['actions'].append('converted_to_wav')
+                result['file'] = output_path.name
+                result['output_file'] = output_path.name
             
         except Exception as e:
             result['status'] = 'error'

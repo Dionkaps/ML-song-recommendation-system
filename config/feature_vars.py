@@ -4,7 +4,7 @@ hop_length = 512
 n_mels = 128  # Kept for compatibility but not used
 n_chroma = 12  # 12-dimensional pitch class profile
 
-include_genre = True
+include_genre = False  # Keep genre only as metadata/evaluation, never as clustering input by default
 n_genres = 10 # Default fallback. Actual number is calculated dynamically from data.
 
 # Whether to include MSD (Million Song Dataset) metadata features

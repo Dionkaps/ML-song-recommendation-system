@@ -21,13 +21,30 @@ project_root = Path(__file__).resolve().parent.parent.parent
 os.chdir(project_root)
 sys.path.insert(0, str(project_root))
 
+FEATURE_SUFFIXES = (
+    "_delta2_mfcc.npy",
+    "_delta_mfcc.npy",
+    "_mfcc.npy",
+    "_spectral_centroid.npy",
+    "_spectral_rolloff.npy",
+    "_spectral_flux.npy",
+    "_spectral_flatness.npy",
+    "_zero_crossing_rate.npy",
+    "_chroma.npy",
+    "_beat_strength.npy",
+)
+
+
 def get_audio_basenames(audio_dir='audio_files'):
     """Get set of basenames from audio files (without extensions)"""
     if not os.path.exists(audio_dir):
         print(f"Error: Audio directory '{audio_dir}' not found!")
         return set()
     
-    audio_files = [f for f in os.listdir(audio_dir) if f.endswith('.mp3')]
+    audio_files = [
+        f for f in os.listdir(audio_dir)
+        if Path(f).suffix.lower() in {'.wav', '.mp3', '.flac', '.m4a'}
+    ]
     basenames = {Path(f).stem for f in audio_files}
     
     print(f"Found {len(audio_files)} audio files")
@@ -48,14 +65,14 @@ def analyze_feature_files(results_dir='output/features', audio_basenames=None):
         if not feature_file.endswith('.npy'):
             continue
         
-        # Extract basename from feature filename
-        # e.g., "Artist - Title_mfcc.npy" -> "Artist - Title"
-        base = feature_file
-        for suffix in ['_mfcc.npy', '_melspectrogram.npy', '_spectral_centroid.npy', 
-                      '_spectral_flatness.npy', '_zero_crossing_rate.npy']:
+        base = None
+        for suffix in FEATURE_SUFFIXES:
             if feature_file.endswith(suffix):
                 base = feature_file[:-len(suffix)]
                 break
+
+        if base is None:
+            continue
         
         feature_groups[base].append(feature_file)
     
@@ -84,7 +101,7 @@ def analyze_feature_files(results_dir='output/features', audio_basenames=None):
     
     return orphaned, list(valid.keys())
 
-def cleanup_orphaned_files(orphaned, results_dir='output/results', dry_run=True):
+def cleanup_orphaned_files(orphaned, results_dir='output/features', dry_run=True):
     """Remove orphaned feature files"""
     total_files = sum(len(files) for files in orphaned.values())
     
@@ -135,7 +152,7 @@ def cleanup_orphaned_files(orphaned, results_dir='output/results', dry_run=True)
         
         print(f"\n✓ Successfully deleted {deleted_count} orphaned feature files")
 
-def verify_cleanup(audio_basenames, results_dir='output/results'):
+def verify_cleanup(audio_basenames, results_dir='output/features'):
     """Verify that cleanup was successful"""
     print(f"\n{'='*60}")
     print("VERIFICATION")
@@ -157,7 +174,7 @@ def main():
                        help='Actually delete files (default is dry-run)')
     parser.add_argument('--audio-dir', default='audio_files',
                        help='Path to audio files directory')
-    parser.add_argument('--results-dir', default='output/clustering_results',
+    parser.add_argument('--results-dir', default='output/features',
                        help='Path to feature results directory')
     
     args = parser.parse_args()

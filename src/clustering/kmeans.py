@@ -184,7 +184,7 @@ def equalize_features_pca(
         4,              # Beat Strength
     ]
     group_names = [
-        "MFCC", "ΔMFCC", "ΔΔMFCC", "SpectralCentroid", "SpectralRolloff",
+        "MFCC", "DeltaMFCC", "Delta2MFCC", "SpectralCentroid", "SpectralRolloff",
         "SpectralFlux", "SpectralFlatness", "ZCR", "Chroma", "BeatStrength"
     ]
     
@@ -236,7 +236,7 @@ def equalize_features_pca(
                 padding = np.zeros((n_samples, pca_components - X_group_transformed.shape[1]))
                 X_group_transformed = np.hstack([X_group_transformed, padding])
             
-            status = "\u2713" if variance_retained >= 80 else "\u26a0"
+            status = "OK" if variance_retained >= 80 else "WARN"
             print(f"  {status} {name}: {size} dims -> {pca_components} dims (PCA, {variance_retained:.1f}% variance)")
         elif size < pca_components:
             # Pad with zeros to reach target dimensions
@@ -316,9 +316,14 @@ def _load_genre_mapping(
     """
     Load genre mapping from unified songs.csv or fallback to legacy methods.
     
+    Genre metadata is always loaded when available so clustering outputs can still
+    include reference genres for evaluation/reporting. The `include_genre` flag is
+    kept for backward compatibility, but no longer controls whether the mapping
+    itself is loaded.
+
     NOTE: When using songs.csv, songs have MULTIPLE genres (multi-label).
-    For clustering purposes, we use the PRIMARY genre (first listed) to maintain
-    compatibility with single-label clustering algorithms.
+    For reporting/evaluation we use the PRIMARY genre (first listed) to maintain
+    compatibility with single-label metrics.
     """
     genre_map_path = os.path.join(results_dir, "genre_map.npy")
     genre_list_path = os.path.join(results_dir, "genre_list.npy")
@@ -329,7 +334,7 @@ def _load_genre_mapping(
     
     active_csv = csv_path if os.path.exists(csv_path) else (legacy_csv_path if os.path.exists(legacy_csv_path) else None)
     
-    if active_csv and include_genre:
+    if active_csv:
         print(f"Loading genre mapping from {active_csv}...")
         multi_label_mapping = genre_mapper.load_genre_mapping(active_csv)
         
@@ -344,8 +349,8 @@ def _load_genre_mapping(
         
         if genre_map:
             np.save(genre_map_path, genre_map)
-            print(f"✓ Loaded genre mapping for {len(genre_map)} songs from CSV")
-    elif os.path.exists(genre_map_path) and include_genre:
+            print(f"Loaded genre mapping for {len(genre_map)} songs from CSV")
+    elif os.path.exists(genre_map_path):
         # Load existing cached mapping
         genre_map: Dict[str, str] = np.load(genre_map_path, allow_pickle=True).item()
         print(f"Loaded cached genre mapping for {len(genre_map)} files")
@@ -362,12 +367,11 @@ def _load_genre_mapping(
                 for wav_path in wav_files:
                     base = Path(wav_path).stem
                     genre_map[base] = genre
-            if include_genre:
-                np.save(genre_map_path, genre_map)
+            np.save(genre_map_path, genre_map)
             print(f"Created genre mapping for {len(genre_map)} files from directory structure")
         else:
-            print(f"⚠️ Warning: No genre directories found in {audio_dir} and no CSV mapping available")
-            print("   Songs will be assigned 'unknown' genre")
+            print(f"Warning: No genre directories found in {audio_dir} and no CSV mapping available")
+            print("   Songs will be assigned 'unknown' genre for metadata only")
 
     unique_genres = sorted(set(genre_map.values())) if genre_map else ['unknown']
     np.save(genre_list_path, unique_genres)
@@ -375,7 +379,30 @@ def _load_genre_mapping(
     return genre_map, unique_genres
 
 
+def _load_audio_basenames(audio_dir: Optional[str]) -> Optional[set]:
+    """Return the basenames that currently exist in the audio library."""
+
+    if not audio_dir or not os.path.isdir(audio_dir):
+        return None
+
+    audio_extensions = ("*.wav", "*.mp3", "*.flac", "*.m4a")
+    basenames = set()
+    for pattern in audio_extensions:
+        basenames.update(
+            Path(path).stem
+            for path in glob.glob(os.path.join(audio_dir, pattern))
+        )
+
+    if not basenames:
+        print(f"Warning: No audio files found in {audio_dir}; using all feature bundles.")
+        return None
+
+    print(f"Restricting clustering dataset to {len(basenames)} audio files from {audio_dir}")
+    return basenames
+
+
 def _collect_feature_vectors(
+    audio_dir: Optional[str],
     results_dir: str,
     genre_map: Dict[str, str],
     unique_genres: List[str],
@@ -400,6 +427,9 @@ def _collect_feature_vectors(
     
     Each time-varying feature is summarized as mean + std.
     Beat strength features are single values (no mean/std needed).
+
+    Genre metadata is attached to the returned rows when available, but is only
+    appended to the feature vector when `include_genre=True`.
     """
     import pandas as pd
     
@@ -430,7 +460,21 @@ def _collect_feature_vectors(
         include_msd = False
 
     feature_files = glob.glob(os.path.join(results_dir, "*_mfcc.npy"))
-    base_names = [os.path.basename(f).replace("_mfcc.npy", "") for f in feature_files]
+    base_names = sorted(
+        os.path.basename(f).replace("_mfcc.npy", "")
+        for f in feature_files
+    )
+
+    audio_basenames = _load_audio_basenames(audio_dir)
+    if audio_basenames is not None:
+        total_feature_bases = len(base_names)
+        base_names = [base for base in base_names if base in audio_basenames]
+        dropped_feature_bases = total_feature_bases - len(base_names)
+        if dropped_feature_bases > 0:
+            print(
+                f"Skipped {dropped_feature_bases} stale feature bundles that do not "
+                f"have a matching file in {audio_dir}"
+            )
 
     file_names: List[str] = []
     feature_vectors: List[np.ndarray] = []
@@ -486,8 +530,10 @@ def _collect_feature_vectors(
             if parts and parts[0] in genre_to_idx:
                 genre = parts[0]
             else:
-                # Skip silently to avoid spamming progress bar
-                continue
+                genre = "unknown"
+                if genre not in genre_to_idx:
+                    genre_to_idx[genre] = len(genre_to_idx)
+                    unique_genres.append(genre)
         genres.append(genre)
 
         # Load and process audio features
@@ -550,6 +596,55 @@ def _collect_feature_vectors(
     return file_names, feature_vectors, genres
 
 
+def load_clustering_dataset(
+    audio_dir: str,
+    results_dir: str,
+    n_mfcc: int = fv.n_mfcc,
+    n_mels: int = fv.n_mels,
+    include_genre: bool = fv.include_genre,
+    include_msd: bool = fv.include_msd_features,
+    songs_csv_path: Optional[str] = None,
+) -> Tuple[List[str], List[str], List[str], np.ndarray]:
+    """
+    Build the shared feature matrix used by all clustering algorithms.
+
+    Genre remains available as metadata for outputs/evaluation, but is only
+    appended to the feature vector when `include_genre=True`.
+    """
+    if songs_csv_path is None:
+        songs_csv_path = "data/songs.csv"
+
+    genre_map, unique_genres = _load_genre_mapping(audio_dir, results_dir, include_genre)
+    file_names, feature_vectors, genres = _collect_feature_vectors(
+        audio_dir,
+        results_dir,
+        genre_map,
+        unique_genres,
+        include_genre,
+        include_msd,
+        songs_csv_path,
+    )
+
+    if not feature_vectors:
+        raise RuntimeError("No songs with complete feature files were found.")
+
+    X_all = np.vstack(feature_vectors).astype(np.float32)
+    X_prepared = prepare_features(
+        X_all,
+        n_mfcc=n_mfcc,
+        n_mels=n_mels,
+        n_genres=len(unique_genres),
+        include_genre=include_genre,
+        include_msd=include_msd,
+    )
+    return file_names, genres, unique_genres, X_prepared
+
+
+def compute_visualization_coords(X_prepared: np.ndarray) -> np.ndarray:
+    """Project the shared prepared feature space to 2D for comparable plots."""
+    return PCA(n_components=2, random_state=42).fit_transform(X_prepared)
+
+
 def compute_cluster_range(n_samples: int, n_genres: int = 0) -> Tuple[int, int]:
     """
     Compute a sensible cluster search range based on data characteristics.
@@ -582,18 +677,18 @@ def compute_cluster_range(n_samples: int, n_genres: int = 0) -> Tuple[int, int]:
     return k_min, k_max
 
 
-def _select_optimal_k_bic(
+def _select_optimal_k_silhouette(
     X: np.ndarray,
     k_min: int,
     k_max: int,
-    n_jobs: int = -1,
-) -> Tuple[int, Optional[np.ndarray], Optional[np.ndarray], List[float]]:
+    n_jobs: int = 1,
+) -> Tuple[int, Optional[np.ndarray], Optional[np.ndarray], List[float], List[float]]:
     """
-    Pick the number of clusters using BIC (consistent with GMM/VaDE).
-    
-    Uses a GMM with spherical covariance to approximate K-Means BIC.
-    This provides consistency with GMM's selection criterion.
-    Uses parallel processing for faster computation.
+    Pick the number of clusters for K-Means using silhouette score.
+
+    This matches the geometry that K-Means actually optimises: compact,
+    well-separated partitions in the prepared feature space.
+    Uses parallel processing across candidate k values.
     
     Args:
         X: Feature matrix
@@ -601,61 +696,83 @@ def _select_optimal_k_bic(
         k_max: Maximum number of clusters  
         n_jobs: Number of parallel jobs (-1 = all cores)
     """
-    from sklearn.mixture import GaussianMixture
-    
-    def evaluate_k(k: int) -> Tuple[int, float, bool]:
-        """Evaluate BIC for a single k value."""
+    k_max = min(k_max, max(k_min, X.shape[0] - 1))
+    sample_size = min(5000, X.shape[0])
+
+    def evaluate_k(k: int) -> Tuple[int, float, float, bool]:
+        """Evaluate silhouette score and inertia for a single k value."""
         try:
-            gmm = GaussianMixture(
-                n_components=k,
-                covariance_type='spherical',
-                n_init=3,
-                max_iter=100,
+            estimator = KMeans(
+                n_clusters=k,
                 random_state=42,
+                n_init=20,
             )
-            gmm.fit(X)
-            bic = gmm.bic(X)
-            return k, bic, gmm.converged_
+            labels = estimator.fit_predict(X)
+            unique_labels = np.unique(labels)
+            if len(unique_labels) < 2 or len(unique_labels) >= len(X):
+                return k, float("-inf"), float("inf"), False
+
+            silhouette_kwargs = {"random_state": 42}
+            if sample_size < len(X):
+                silhouette_kwargs["sample_size"] = sample_size
+            score = silhouette_score(X, labels, **silhouette_kwargs)
+            return k, score, estimator.inertia_, True
         except Exception:
-            return k, float('inf'), False
-    
-    print(f"Searching for optimal k using BIC ({k_min}-{k_max}) with parallel processing...")
-    
-    # Parallel evaluation of all k values
+            return k, float("-inf"), float("inf"), False
+
+    print(f"Searching for optimal k using silhouette ({k_min}-{k_max})...")
+
     k_values = list(range(k_min, k_max + 1))
-    results = Parallel(n_jobs=n_jobs, verbose=1)(
-        delayed(evaluate_k)(k) for k in k_values
-    )
-    
-    # Process results
+    if n_jobs == 1:
+        results = [evaluate_k(k) for k in k_values]
+    else:
+        results = Parallel(n_jobs=n_jobs, verbose=1, prefer="threads")(
+            delayed(evaluate_k)(k) for k in k_values
+        )
+
     best_k = k_min
-    best_bic = float('inf')
-    bic_scores: List[float] = []
-    
-    for k, bic, converged in sorted(results, key=lambda x: x[0]):
-        bic_scores.append(bic)
-        if converged and bic < best_bic:
-            best_bic = bic
+    best_score = float("-inf")
+    silhouette_scores: List[float] = []
+    inertia_scores: List[float] = []
+
+    for k, score, inertia, converged in sorted(results, key=lambda x: x[0]):
+        silhouette_scores.append(score)
+        inertia_scores.append(inertia)
+        if converged and score > best_score:
+            best_score = score
             best_k = k
-    
-    # Now fit the final K-Means model with the best k
+
+    selected_score = best_score
+
+    if best_score > float("-inf"):
+        candidate_rows = [
+            (k, score, inertia)
+            for k, score, inertia, converged in sorted(results, key=lambda x: x[0])
+            if converged and score >= best_score - 0.01
+        ]
+        if candidate_rows:
+            best_k, selected_score, _ = min(
+                candidate_rows,
+                key=lambda row: (row[0], row[2]),
+            )
+
     best_labels: Optional[np.ndarray] = None
     best_centers: Optional[np.ndarray] = None
-    
-    if best_bic < float('inf'):
-        print(f"Optimal k (BIC) -> {best_k} (BIC={best_bic:.2f})")
+
+    if best_score > float("-inf"):
+        print(f"Optimal k (silhouette) -> {best_k} (score={selected_score:.4f})")
         estimator = KMeans(n_clusters=best_k, random_state=42, n_init=10)
         best_labels = estimator.fit_predict(X)
         best_centers = estimator.cluster_centers_
     else:
-        print("BIC-based search failed, using fallback")
-    
-    return best_k, best_labels, best_centers, bic_scores
+        print("Silhouette-based search failed, using fallback")
+
+    return best_k, best_labels, best_centers, silhouette_scores, inertia_scores
 
 
 def run_kmeans_clustering(
     audio_dir: str = "audio_files",
-    results_dir: str = "output/results",
+    results_dir: str = "output/features",
     n_clusters: int = 3,
     dynamic_cluster_selection: bool = True,
     dynamic_k_min: Optional[int] = None,
@@ -668,46 +785,34 @@ def run_kmeans_clustering(
 ):
     os.makedirs(results_dir, exist_ok=True)
     
-    # Auto-detect songs.csv path if not provided
-    if songs_csv_path is None:
-        songs_csv_path = "data/songs.csv"
-
-    genre_map, unique_genres = _load_genre_mapping(audio_dir, results_dir, include_genre)
-    file_names, feature_vectors, genres = _collect_feature_vectors(
-        results_dir, genre_map, unique_genres, include_genre, include_msd, songs_csv_path
-    )
-
-    if not feature_vectors:
-        raise RuntimeError("No songs with complete feature files were found.")
-
-    X_all = np.vstack(feature_vectors)
-    
-    # Use the unified feature preparation (PCA per group or weighted)
-    X_prepared = prepare_features(
-        X_all,
+    file_names, genres, unique_genres, X_prepared = load_clustering_dataset(
+        audio_dir=audio_dir,
+        results_dir=results_dir,
         n_mfcc=n_mfcc,
         n_mels=n_mels,
-        n_genres=len(unique_genres),
         include_genre=include_genre,
         include_msd=include_msd,
+        songs_csv_path=songs_csv_path,
     )
 
     labels: Optional[np.ndarray] = None
     centers: Optional[np.ndarray] = None
-    bic_scores: Optional[List[float]] = None
+    silhouette_scores: Optional[List[float]] = None
+    inertia_scores: Optional[List[float]] = None
 
     if dynamic_cluster_selection:
         n_samples = X_prepared.shape[0]
         
         # Compute data-driven cluster range if not explicitly provided
-        auto_k_min, auto_k_max = compute_cluster_range(n_samples, len(unique_genres))
+        genre_count_hint = len(unique_genres) if include_genre else 0
+        auto_k_min, auto_k_max = compute_cluster_range(n_samples, genre_count_hint)
         k_min = dynamic_k_min if dynamic_k_min is not None else auto_k_min
         k_max = dynamic_k_max if dynamic_k_max is not None else auto_k_max
         
         print(f"Dynamic cluster selection: searching k in [{k_min}, {k_max}]")
-        print(f"  (Based on {n_samples} samples and {len(unique_genres)} genres)")
+        print(f"  (Based on {n_samples} samples)")
 
-        best_k, best_labels, best_centers, bic_scores = _select_optimal_k_bic(
+        best_k, best_labels, best_centers, silhouette_scores, inertia_scores = _select_optimal_k_silhouette(
             X_prepared, k_min, k_max
         )
         n_clusters = best_k
@@ -720,7 +825,7 @@ def run_kmeans_clustering(
         labels = estimator.fit_predict(X_prepared)
         centers = estimator.cluster_centers_
 
-    coords = PCA(n_components=2, random_state=42).fit_transform(X_prepared)
+    coords = compute_visualization_coords(X_prepared)
     distances = np.linalg.norm(X_prepared - centers[labels], axis=1)
 
     df = pd.DataFrame(
@@ -739,16 +844,17 @@ def run_kmeans_clustering(
     output_dir.mkdir(parents=True, exist_ok=True)
     metrics_dir.mkdir(parents=True, exist_ok=True)
     
-    # Save BIC scores if available
-    if bic_scores is not None:
-        k_min = dynamic_k_min if dynamic_k_min is not None else 2
+    # Save selection diagnostics if available
+    if silhouette_scores is not None and inertia_scores is not None:
+        k_min = dynamic_k_min if dynamic_k_min is not None else auto_k_min
         selection_df = pd.DataFrame({
-            "K": list(range(k_min, k_min + len(bic_scores))),
-            "BIC": bic_scores,
+            "K": list(range(k_min, k_min + len(silhouette_scores))),
+            "Silhouette": silhouette_scores,
+            "Inertia": inertia_scores,
         })
         selection_path = metrics_dir / "kmeans_selection_criteria.csv"
         selection_df.to_csv(selection_path, index=False)
-        print(f"Stored BIC diagnostics -> {selection_path}")
+        print(f"Stored silhouette diagnostics -> {selection_path}")
     
     csv_path = output_dir / "audio_clustering_results_kmeans.csv"
     df.to_csv(csv_path, index=False)

@@ -13,6 +13,7 @@ millionsongsubset.tar.gz
 # Output directories (generated files)
 results/
 processed_results/
+output/
 output/embeddings/
 output/features/
 output/metrics/
@@ -50,6 +51,14 @@ musicnn_keras/keras_checkpoints/
 *.tmp
 *.temp
 *.log
+install_log_*.txt
+
+# Runtime artifacts / caches
+data/songs.csv
+download_checkpoint_with_genre.json
+deezer_search_cache.json
+src/data_collection/download_stats/*.png
+tmp_*/
 
 # OS files
 .DS_Store

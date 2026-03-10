@@ -59,7 +59,7 @@ def load_genre_mapping(csv_path: str = None) -> Dict[str, List[str]]:
                     genres = [g.strip() for g in genre_str.split(',') if g.strip()]
                     genre_mapping[filename] = genres
                     
-        print(f"✓ Loaded genre mapping for {len(genre_mapping)} songs from {csv_path}")
+        print(f"Loaded genre mapping for {len(genre_mapping)} songs from {csv_path}")
         
         # Print genre statistics
         all_genres = set()
@@ -93,7 +93,7 @@ def get_multi_label_encoding(genre_mapping: Dict[str, List[str]]) -> Tuple[np.nd
     mlb = MultiLabelBinarizer()
     genre_matrix = mlb.fit_transform(genre_lists)
     
-    print(f"✓ Multi-label encoding: {genre_matrix.shape[0]} songs × {genre_matrix.shape[1]} genres")
+    print(f"Loaded multi-label encoding: {genre_matrix.shape[0]} songs x {genre_matrix.shape[1]} genres")
     
     return genre_matrix, mlb.classes_.tolist(), mlb
 
@@ -143,7 +143,7 @@ def create_genre_map_for_audio_dir(audio_dir: str, genre_mapping: Dict[str, List
     known_count = sum(1 for g in genre_map.values() if g != 'unknown')
     unknown_count = len(genre_map) - known_count
     
-    print(f"✓ Genre map created for {len(genre_map)} audio files")
+    print(f"Genre map created for {len(genre_map)} audio files")
     print(f"  - Known genres: {known_count}")
     print(f"  - Unknown: {unknown_count}")
     
@@ -218,6 +218,6 @@ if __name__ == '__main__':
         audio_dir = 'audio_files'
         genre_map = create_genre_map_for_audio_dir(audio_dir, genre_mapping)
         
-        print("\n✓ Genre mapper test complete!")
+        print("\nGenre mapper test complete!")
     else:
         print(f"\nError: Could not load genre mapping from {csv_path}")
