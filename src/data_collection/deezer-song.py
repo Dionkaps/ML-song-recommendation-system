@@ -10,6 +10,7 @@ import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
+import numpy as np
 from datetime import datetime
 from pathlib import Path
 from tqdm import tqdm
@@ -18,6 +19,8 @@ from tqdm import tqdm
 project_root = Path(__file__).resolve().parent.parent.parent
 os.chdir(project_root)
 sys.path.insert(0, str(project_root))
+
+from src.utils.song_metadata import ensure_unified_songs_schema
 
 DEEZE_AUDIO_FOLDER = "audio_files"
 UNIFIED_CSV = os.path.join("data", "songs.csv")  # Unified CSV with all song data
@@ -430,36 +433,28 @@ def update_unified_csv(downloaded_songs):
     if not os.path.exists(UNIFIED_CSV):
         print(f"Warning: Unified CSV not found at {UNIFIED_CSV}")
         print("Creating new unified CSV from download data...")
-        # Build CSV using explicit field names (dict insertion order is not stable enough).
         df = pd.DataFrame(downloaded_songs)
-        expected_columns = [
-            "deezer_title",
-            "deezer_artist",
-            "filename",
-            "genre",
-            "msd_artist",
-            "msd_title",
-            "msd_track_id",
-        ]
-
-        # Backward compatibility if older keys are present.
         if "deezer_title" not in df.columns and "title" in df.columns:
             df["deezer_title"] = df["title"]
         if "deezer_artist" not in df.columns and "artist" in df.columns:
             df["deezer_artist"] = df["artist"]
-
-        for col in expected_columns:
-            if col not in df.columns:
-                df[col] = ""
-
-        df = df[expected_columns].copy()
+        if "msd_track_id" not in df.columns:
+            df["msd_track_id"] = ""
+        if "msd_artist" not in df.columns:
+            df["msd_artist"] = ""
+        if "msd_title" not in df.columns:
+            df["msd_title"] = ""
+        df = ensure_unified_songs_schema(df)
+        df["metadata_origin"] = "deezer_download_bootstrap"
+        df["genre_source"] = np.where(df["genre"].astype(str).str.strip().ne(""), "deezer_download", "")
+        df["audio_match_source"] = "deezer_download"
         df["has_audio"] = True
         df.to_csv(UNIFIED_CSV, index=False)
         return
     
     try:
         # Load existing unified CSV
-        unified = pd.read_csv(UNIFIED_CSV)
+        unified = ensure_unified_songs_schema(pd.read_csv(UNIFIED_CSV))
         
         def normalize(s):
             if pd.isna(s):
@@ -491,6 +486,7 @@ def update_unified_csv(downloaded_songs):
                 updated_count += 1
         
         # Save updated unified CSV
+        unified = ensure_unified_songs_schema(unified)
         unified.to_csv(UNIFIED_CSV, index=False)
         print(f"Updated {updated_count} songs in unified CSV: {UNIFIED_CSV}")
         

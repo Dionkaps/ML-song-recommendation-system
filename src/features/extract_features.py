@@ -7,6 +7,8 @@ import warnings
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from pathlib import Path
 import sys
+import platform
+import json
 from tqdm import tqdm
 
 # Add parent directories to path for imports
@@ -19,12 +21,84 @@ import contextlib
 import io
 import soundfile as sf
 
+from src.features.feature_qc import (
+    FEATURE_KEYS,
+    get_feature_output_paths,
+    validate_feature_array,
+)
+
 # Suppress specific warnings
 warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", category=FutureWarning)
 
-FEATURE_KEYS = tuple(fv.AUDIO_FEATURE_KEYS)
 DEFAULT_MAX_WORKERS = 8
+
+
+def build_feature_extraction_manifest(
+    audio_dir,
+    results_dir,
+    workers,
+    executor_type,
+    resume,
+    total_audio_files,
+    processed,
+    skipped,
+    failed,
+):
+    """Capture the deterministic extraction contract used for this feature library."""
+
+    return {
+        "manifest_version": 1,
+        "audio_dir": str(audio_dir),
+        "results_dir": str(results_dir),
+        "audio_file_order": "sorted_lexicographically",
+        "resume_enabled": bool(resume),
+        "executor_type": str(executor_type),
+        "workers": int(workers),
+        "feature_keys": list(FEATURE_KEYS),
+        "deterministic_notes": [
+            "Feature extraction uses fixed config values only; no random sampling is used.",
+            "Input audio is processed in sorted filename order before dispatch.",
+            "The extracted arrays should be reproducible as long as the preprocessed audio library and library versions remain the same.",
+        ],
+        "audio_contract": {
+            "expected_sample_rate_hz": int(fv.baseline_sample_rate),
+            "expected_duration_seconds": float(fv.baseline_target_duration_seconds),
+            "force_mono": bool(fv.baseline_force_mono),
+            "output_subtype": str(fv.baseline_output_subtype),
+            "target_lufs": float(fv.baseline_target_lufs),
+            "max_true_peak_dbtp": float(fv.baseline_max_true_peak_dbtp),
+        },
+        "feature_settings": {
+            "n_mfcc": int(fv.n_mfcc),
+            "n_fft": int(fv.n_fft),
+            "hop_length": int(fv.hop_length),
+            "n_chroma": int(fv.n_chroma),
+        },
+        "library_versions": {
+            "python": sys.version.split()[0],
+            "platform": platform.platform(),
+            "numpy": np.__version__,
+            "librosa": librosa.__version__,
+            "soundfile": sf.__version__,
+        },
+        "run_summary": {
+            "total_audio_files": int(total_audio_files),
+            "processed": int(processed),
+            "skipped": int(skipped),
+            "failed": int(failed),
+        },
+    }
+
+
+def write_feature_extraction_manifest(results_dir, manifest):
+    """Persist the feature extraction contract for reproducibility."""
+
+    manifest_path = os.path.join(results_dir, "feature_extraction_manifest.json")
+    with open(manifest_path, "w", encoding="utf-8") as handle:
+        json.dump(manifest, handle, indent=2)
+    print(f"Feature extraction manifest written to: {manifest_path}")
+    return manifest_path
 
 @contextlib.contextmanager
 def suppress_stderr():
@@ -137,14 +211,6 @@ def extract_beat_strength(y, sr, hop_length=fv.hop_length):
     return np.array([[tempo], [mean_onset_strength], [std_onset_strength], [onset_rate]])
 
 
-def get_feature_output_paths(base_filename, results_dir):
-    """Return the expected feature bundle paths for one song basename."""
-    return {
-        key: os.path.join(results_dir, f"{base_filename}_{key}.npy")
-        for key in FEATURE_KEYS
-    }
-
-
 def has_complete_feature_bundle(base_filename, results_dir):
     """Check whether all expected feature files already exist for one song."""
     return all(
@@ -236,6 +302,12 @@ def process_file(audio_path, results_dir, n_mfcc, n_fft, hop_length, n_mels):
         }
 
         for key, array in feature_arrays.items():
+            validate_feature_array(
+                key,
+                np.asarray(array),
+                n_mfcc=n_mfcc,
+                n_chroma=fv.n_chroma,
+            )
             save_array_atomic(output_paths[key], array)
 
         return {"base_name": base_filename, "status": "processed"}
@@ -259,6 +331,27 @@ def run_feature_extraction(
     Works with flat directory structure - genre info comes from unified songs.csv.
     """
     os.makedirs(results_dir, exist_ok=True)
+
+    def finalize(total_audio_files, processed, skipped, failed, resolved_executor, resolved_workers):
+        manifest = build_feature_extraction_manifest(
+            audio_dir=audio_dir,
+            results_dir=results_dir,
+            workers=resolved_workers,
+            executor_type=resolved_executor,
+            resume=resume,
+            total_audio_files=total_audio_files,
+            processed=processed,
+            skipped=skipped,
+            failed=failed,
+        )
+        write_feature_extraction_manifest(results_dir, manifest)
+        return {
+            "total_audio_files": total_audio_files,
+            "processed": processed,
+            "skipped": skipped,
+            "failed": failed,
+            "results_dir": results_dir,
+        }
     
     if not os.path.exists(audio_dir):
         print(f"Error: Audio directory '{audio_dir}' not found.")
@@ -276,13 +369,7 @@ def run_feature_extraction(
     if not audio_files:
         print(f"No audio files found in {audio_dir}.")
         print(f"Searched for extensions: {', '.join(audio_extensions)}")
-        return {
-            "total_audio_files": 0,
-            "processed": 0,
-            "skipped": 0,
-            "failed": 0,
-            "results_dir": results_dir,
-        }
+        return finalize(0, 0, 0, 0, executor_type, workers or 0)
 
     pending_audio_files = []
     skipped_existing = 0
@@ -307,13 +394,11 @@ def run_feature_extraction(
         print("All audio files already have complete feature bundles.\n")
         print("NOTE: Genre and MSD metadata are loaded from unified data/songs.csv")
         print("      Use genre_mapper.py utility to map features to genres.")
-        return {
-            "total_audio_files": len(audio_files),
-            "processed": 0,
-            "skipped": skipped_existing,
-            "failed": 0,
-            "results_dir": results_dir,
-        }
+        resolved_executor = 'thread' if executor_type == 'auto' and os.name == 'nt' else (
+            'process' if executor_type == 'auto' else executor_type
+        )
+        resolved_workers = max(1, min(skipped_existing or 1, DEFAULT_MAX_WORKERS))
+        return finalize(len(audio_files), 0, skipped_existing, 0, resolved_executor, resolved_workers)
 
     if executor_type == 'auto':
         executor_type = 'thread' if os.name == 'nt' else 'process'
@@ -398,13 +483,14 @@ def run_feature_extraction(
     # Note about genre mapping
     print("NOTE: Genre and MSD metadata are loaded from unified data/songs.csv")
     print("      Use genre_mapper.py utility to map features to genres.")
-    return {
-        "total_audio_files": len(audio_files),
-        "processed": processed_count,
-        "skipped": skipped_existing,
-        "failed": failed_count,
-        "results_dir": results_dir,
-    }
+    return finalize(
+        len(audio_files),
+        processed_count,
+        skipped_existing,
+        failed_count,
+        executor_type,
+        num_workers,
+    )
 
 
 def main():

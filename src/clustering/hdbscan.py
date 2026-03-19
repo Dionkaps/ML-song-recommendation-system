@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 from pathlib import Path
@@ -26,7 +27,13 @@ if removed_script_dir:
 from config import feature_vars as fv
 from src.ui.modern_ui import launch_ui
 
-from src.clustering.kmeans import compute_visualization_coords, load_clustering_dataset
+from src.clustering.kmeans import (
+	compute_visualization_coords,
+	get_retrieval_artifact_path,
+	load_clustering_dataset_bundle,
+	save_retrieval_artifact,
+	snapshot_dataset_qc_artifacts,
+)
 
 
 def _compute_cluster_centers(
@@ -185,6 +192,8 @@ def _select_hdbscan_model(
 def run_hdbscan_clustering(
 	audio_dir: str = "audio_files",
 	results_dir: str = "output/features",
+	output_dir: str = "output/clustering_results",
+	metrics_dir: str = "output/metrics",
 	min_cluster_size: int = 10,
 	min_samples: Optional[int] = None,
 	dynamic_parameter_selection: bool = True,
@@ -196,10 +205,16 @@ def run_hdbscan_clustering(
 	include_genre: bool = fv.include_genre,
 	include_msd: bool = fv.include_msd_features,
 	songs_csv_path: Optional[str] = None,
+	selected_audio_feature_keys: Optional[List[str]] = None,
+	equalization_method: Optional[str] = None,
+	pca_components: Optional[int] = None,
+	profile_id: Optional[str] = None,
 ):
 	os.makedirs(results_dir, exist_ok=True)
+	requested_min_cluster_size = int(min_cluster_size)
+	requested_min_samples = None if min_samples is None else int(min_samples)
 
-	file_names, genres, unique_genres, X_prepared = load_clustering_dataset(
+	dataset_bundle = load_clustering_dataset_bundle(
 		audio_dir=audio_dir,
 		results_dir=results_dir,
 		n_mfcc=n_mfcc,
@@ -207,7 +222,15 @@ def run_hdbscan_clustering(
 		include_genre=include_genre,
 		include_msd=include_msd,
 		songs_csv_path=songs_csv_path,
+		selected_audio_feature_keys=selected_audio_feature_keys,
+		equalization_method=equalization_method,
+		pca_components=pca_components,
 	)
+	file_names = dataset_bundle["file_names"]
+	genres = dataset_bundle["genres"]
+	unique_genres = dataset_bundle["unique_genres"]
+	X_prepared = dataset_bundle["prepared_features"]
+	metadata_frame = dataset_bundle["metadata_frame"]
 
 	selection_rows: Optional[List[Dict[str, float]]] = None
 
@@ -252,6 +275,11 @@ def run_hdbscan_clustering(
 	df = pd.DataFrame(
 		{
 			"Song": file_names,
+			"Artist": metadata_frame["Artist"].astype(str).to_numpy(),
+			"Title": metadata_frame["Title"].astype(str).to_numpy(),
+			"Filename": metadata_frame["Filename"].astype(str).to_numpy(),
+			"MSDTrackID": metadata_frame["MSDTrackID"].astype(str).to_numpy(),
+			"GenreList": metadata_frame["GenreList"].astype(str).to_numpy(),
 			"Genre": genres,
 			"Cluster": labels,
 			"Probability": probabilities,
@@ -261,18 +289,113 @@ def run_hdbscan_clustering(
 		}
 	)
 
-	output_dir = Path("output/clustering_results")
-	metrics_dir = Path("output/metrics")
-	output_dir.mkdir(parents=True, exist_ok=True)
-	metrics_dir.mkdir(parents=True, exist_ok=True)
+	output_dir_path = Path(output_dir)
+	metrics_dir_path = Path(metrics_dir)
+	output_dir_path.mkdir(parents=True, exist_ok=True)
+	metrics_dir_path.mkdir(parents=True, exist_ok=True)
 	if selection_rows is not None:
 		selection_df = pd.DataFrame(selection_rows)
-		selection_path = metrics_dir / "hdbscan_selection_criteria.csv"
+		selection_path = metrics_dir_path / "hdbscan_selection_criteria.csv"
 		selection_df.to_csv(selection_path, index=False)
 		print(f"Stored HDBSCAN selection diagnostics -> {selection_path}")
-	csv_path = output_dir / "audio_clustering_results_hdbscan.csv"
+	else:
+		selection_path = None
+	csv_path = output_dir_path / "audio_clustering_results_hdbscan.csv"
 	df.to_csv(csv_path, index=False)
 	print(f"Results written to -> {csv_path}")
+
+	save_retrieval_artifact(
+		method_id="hdbscan",
+		file_names=file_names,
+		prepared_features=X_prepared,
+		labels=labels,
+		coords=coords,
+		output_dir=str(output_dir_path),
+		artists=metadata_frame["Artist"].astype(str).to_numpy(),
+		titles=metadata_frame["Title"].astype(str).to_numpy(),
+		filenames=metadata_frame["Filename"].astype(str).to_numpy(),
+		msd_track_ids=metadata_frame["MSDTrackID"].astype(str).to_numpy(),
+		assignment_confidence=probabilities,
+		distance_to_cluster=distances,
+		feature_subset_name=dataset_bundle["qc_summary"].get("feature_subset_name"),
+		selected_audio_feature_keys=dataset_bundle["qc_summary"].get(
+			"selected_audio_feature_keys"
+		),
+		feature_equalization_method=dataset_bundle["qc_summary"].get(
+			"equalization_method"
+		),
+		pca_components_per_group=dataset_bundle["qc_summary"].get(
+			"pca_components_per_group"
+		),
+		raw_feature_dimension=dataset_bundle["qc_summary"].get("raw_feature_dimension"),
+		prepared_feature_dimension=dataset_bundle["qc_summary"].get(
+			"prepared_feature_dimension"
+		),
+		profile_id=profile_id,
+	)
+
+	method_summary = {
+		"method_id": "hdbscan",
+		"profile_id": profile_id or "unspecified",
+		"representation": {
+			"feature_subset_name": dataset_bundle["qc_summary"].get("feature_subset_name"),
+			"selected_audio_feature_keys": dataset_bundle["qc_summary"].get(
+				"selected_audio_feature_keys"
+			),
+			"equalization_method": dataset_bundle["qc_summary"].get(
+				"equalization_method"
+			),
+			"pca_components_per_group": dataset_bundle["qc_summary"].get(
+				"pca_components_per_group"
+			),
+			"raw_feature_dimension": dataset_bundle["qc_summary"].get(
+				"raw_feature_dimension"
+			),
+			"prepared_feature_dimension": dataset_bundle["qc_summary"].get(
+				"prepared_feature_dimension"
+			),
+			"include_genre": bool(include_genre),
+			"include_msd_requested": bool(include_msd),
+			"include_msd_effective": dataset_bundle["qc_summary"].get(
+				"include_msd_effective"
+			),
+		},
+		"hyperparameters": {
+			"dynamic_parameter_selection": bool(dynamic_parameter_selection),
+			"requested_min_cluster_size": requested_min_cluster_size,
+			"selected_min_cluster_size": int(min_cluster_size),
+			"requested_min_samples": requested_min_samples,
+			"selected_min_samples": (None if min_samples is None else int(min_samples)),
+			"cluster_selection_epsilon": float(cluster_selection_epsilon),
+			"allow_single_cluster": bool(allow_single_cluster),
+		},
+		"outputs": {
+			"results_csv": str(csv_path),
+			"retrieval_artifact": str(
+				get_retrieval_artifact_path("hdbscan", output_dir=str(output_dir_path))
+			),
+			"selection_criteria_csv": (
+				str(selection_path) if selection_path is not None else None
+			),
+			"dataset_qc_summary_json": dataset_bundle["qc_json_path"],
+			"dataset_qc_csv": dataset_bundle["qc_csv_path"],
+		},
+		"cluster_summary": {
+			"cluster_count": int(len(set(labels)) - (1 if -1 in labels else 0)),
+			"noise_fraction": float((labels == -1).mean()),
+		},
+	}
+	run_qc_csv_path, run_qc_json_path = snapshot_dataset_qc_artifacts(
+		dataset_bundle["qc_csv_path"],
+		dataset_bundle["qc_json_path"],
+		str(metrics_dir_path),
+	)
+	method_summary["outputs"]["dataset_qc_summary_json"] = run_qc_json_path
+	method_summary["outputs"]["dataset_qc_csv"] = run_qc_csv_path
+	summary_path = metrics_dir_path / "hdbscan_run_summary.json"
+	with summary_path.open("w", encoding="utf-8") as handle:
+		json.dump(method_summary, handle, indent=2)
+	print(f"Stored HDBSCAN run summary -> {summary_path}")
 
 	noise_pct = (labels == -1).mean() * 100.0
 	print(
@@ -290,4 +413,11 @@ if __name__ == "__main__":
 		include_genre=fv.include_genre,
 	)
 
-	launch_ui(DF, COORDS, LABELS, audio_dir="audio_files", clustering_method="HDBSCAN")
+	launch_ui(
+		DF,
+		COORDS,
+		LABELS,
+		audio_dir="audio_files",
+		clustering_method="HDBSCAN",
+		retrieval_method_id="hdbscan",
+	)

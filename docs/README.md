@@ -1,287 +1,127 @@
 # ML Song Recommendation System Documentation
 
-This document provides a detailed overview of the ML Song Recommendation System project, explaining each component, their functionality, and how they interact to create a music recommendation system based on audio feature analysis.
-
-## Table of Contents
-
-1. [Project Overview](#project-overview)
-2. [System Architecture](#system-architecture)
-3. [Components](#components)
-   - [Audio Download Module](#audio-download-module)
-   - [Feature Extraction Module](#feature-extraction-module)
-   - [Feature Visualization Module](#feature-visualization-module)
-   - [Clustering & Recommendation Module](#clustering--recommendation-module)
-4. [Pipeline Execution](#pipeline-execution)
-5. [Technical Details](#technical-details)
-6. [Usage](#usage)
+This document gives a current high-level overview of the workspace and its
+supported baseline.
 
 ## Project Overview
 
-The ML Song Recommendation System is a machine learning project that analyzes audio files to create a content-based music recommendation system. It processes audio features from songs, applies machine learning techniques to identify similar songs, and provides a graphical user interface to explore and receive recommendations.
+The project builds a content-based music recommendation system from local audio
+files. The active workflow is:
 
-## System Architecture
+1. collect or refresh metadata and local audio
+2. preprocess audio to a consistent baseline
+3. extract handcrafted audio features
+4. cluster songs in prepared feature space
+5. surface recommendations from clustering outputs in the UI
 
-The system follows a modular pipeline architecture with these major steps:
+## Supported Baseline
 
-```
-┌──────────────┐     ┌─────────────────┐     ┌────────────────────┐     ┌────────────────┐     ┌──────────────────────┐
-│  Download    │     │  Extract Audio  │     │  Process Features  │     │  Visualize     │     │  Cluster & Generate  │
-│  Audio Files │────>│  Features       │────>│  (Scale, Clean)    │────>│  Features      │────>│  Recommendations     │
-└──────────────┘     └─────────────────┘     └────────────────────┘     └────────────────┘     └──────────────────────┘
-```
+The current supported baseline is documented in
+[SUPPORTED_BASELINE.md](SUPPORTED_BASELINE.md). In short:
 
-## Components
+- preprocessing invariants: mono, `22050 Hz`, `29s`, `PCM_16`, loudness-normalized
+- clustering input: audio-only handcrafted `spectral_plus_beat`
+- preparation: per-group scaling plus `pca_per_group_5`
+- default clustering method: `GMM`
+- genre and other metadata remain metadata/evaluation signals, not clustering input
 
-### Audio Download Module
+The current explicit decision policy is documented in
+[DECISION_POLICY.md](DECISION_POLICY.md).
 
-**File:** `playlist_audio_download.py`
+## Main Components
 
-This module handles downloading audio files from YouTube links or playlists.
+### Data and metadata
 
-**Key Functions:**
-- `download_videos()`: Downloads individual videos from URLs
-- `download_from_links()`: Processes a file containing YouTube URLs or playlists
-- `main()`: Entry point for the module
+- `src/data_collection/deezer-song.py`
+- `src/data_collection/extract_millionsong_dataset.py`
+- `src/utils/song_metadata.py`
 
-**Process Flow:**
+These scripts maintain the unified `data/songs.csv` catalog and align local
+audio with metadata rows.
 
-```
-┌───────────────────┐     ┌───────────────────┐     ┌───────────────────┐     ┌──────────────┐
-│  Read Links from  │     │  Process Each     │     │  Download Audio   │     │  Convert to  │
-│  links.txt        │────>│  URL/Playlist     │────>│  Using yt-dlp     │────>│  WAV Format  │
-└───────────────────┘     └───────────────────┘     └───────────────────┘     └──────────────┘
-```
+### Audio preprocessing
 
-### Feature Extraction Module
+- `scripts/run_audio_preprocessing.py`
+- `src/audio_preprocessing/processor.py`
+- `src/audio_preprocessing/loudness_normalizer.py`
 
-**Files:** 
-- `extract_features.py`: Main extraction logic
-- `feature_vars.py`: Constants for feature extraction parameters
+This stage enforces the supported audio baseline before feature extraction.
+Integrated loudness is measured with BS.1770 logic, and a sample-peak ceiling
+is applied after gain. The implementation does not perform oversampled
+true-peak limiting.
 
-This module extracts audio features from the downloaded WAV files using librosa.
+### Feature extraction
 
-**Key Functions:**
-- `extract_mfcc()`: Extracts Mel-Frequency Cepstral Coefficients
-- `extract_melspectrogram()`: Extracts Mel-Spectrogram
-- `extract_spectral_centroid()`: Extracts Spectral Centroid
-- `extract_spectral_flatness()`: Extracts Spectral Flatness
-- `extract_zero_crossing_rate()`: Extracts Zero Crossing Rate
-- `process_file()`: Processes a single audio file
-- `run_feature_extraction()`: Processes all audio files in parallel
+- `src/features/extract_features.py`
+- `scripts/visualization/ploting.py`
 
-**Process Flow:**
+The active handcrafted extractor writes MFCC-family features, spectral
+descriptors, chroma, and beat/rhythm summaries. The clustering baseline uses
+the `spectral_plus_beat` subset, while plotting can still visualize legacy
+mel-spectrogram arrays if they already exist on disk.
 
-```
-┌──────────────┐     ┌───────────────┐     ┌────────────────────────────┐     ┌───────────────────┐
-│  Load Audio  │     │  Extract      │     │  Save Features as .npy     │     │  Process Next     │
-│  WAV File    │────>│  Features     │────>│  Files in results/ folder  │────>│  File (Parallel)  │
-└──────────────┘     └───────────────┘     └────────────────────────────┘     └───────────────────┘
-```
+### Clustering and recommendation
 
-**Audio Features Extracted:**
+- `src/clustering/kmeans.py`
+- `src/clustering/gmm.py`
+- `src/clustering/hdbscan.py`
+- `src/clustering/vade.py`
+- `src/ui/modern_ui.py`
 
-```
-┌──────────────────────────────┐
-│ Audio Features               │
-├──────────────────────────────┤
-│ ┌────────────────────────┐   │
-│ │ MFCC (Timbre)          │   │
-│ └────────────────────────┘   │
-│                              │
-│ ┌────────────────────────┐   │
-│ │ Mel-Spectrogram        │   │
-│ │ (Frequency Analysis)   │   │
-│ └────────────────────────┘   │
-│                              │
-│ ┌────────────────────────┐   │
-│ │ Spectral Centroid      │   │
-│ │ (Brightness)           │   │
-│ └────────────────────────┘   │
-│                              │
-│ ┌────────────────────────┐   │
-│ │ Spectral Flatness      │   │
-│ │ (Tonality vs. Noise)   │   │
-│ └────────────────────────┘   │
-│                              │
-│ ┌────────────────────────┐   │
-│ │ Zero Crossing Rate     │   │
-│ │ (Percussiveness)       │   │
-│ └────────────────────────┘   │
-└──────────────────────────────┘
+The workspace supports multiple clustering methods for comparison, but the
+default baseline currently points to `GMM`.
+
+## Pipeline Entry Points
+
+### Full pipeline
+
+```bash
+python run_pipeline.py
 ```
 
-### Feature Visualization Module
+### Preprocess audio only
 
-**File:** `ploting.py`
-
-This module visualizes the extracted audio features using matplotlib.
-
-**Key Functions:**
-- `plot_feature()`: Creates plots for specific feature types
-- `run_plotting()`: Generates plots for all features of all songs
-- `main()`: Entry point with command-line argument handling
-
-**Process Flow:**
-
-```
-┌───────────────────┐     ┌───────────────────────┐     ┌──────────────────────┐
-│  Load Audio and   │     │  Generate Individual  │     │  Save Visualization  │
-│  Feature Files    │────>│  Feature Plots        │────>│  as PNG Files        │
-└───────────────────┘     └───────────────────────┘     └──────────────────────┘
+```bash
+python scripts/run_audio_preprocessing.py --audio-dir audio_files
 ```
 
-### Clustering & Recommendation Module
+### Extract handcrafted features only
 
-**File:** `kmeans.py`
-
-This module performs clustering on the processed features and provides a recommendation system with a graphical user interface.
-
-**Key Functions:**
-- `build_group_weights()`: Creates feature group weights for balanced clustering
-- `run_kmeans_clustering()`: Performs K-means clustering on audio features
-- `launch_ui()`: Launches the graphical user interface for recommendations
-
-**Process Flow:**
-
-```
-┌───────────────────┐     ┌──────────────────────┐     ┌───────────────────┐     ┌──────────────────────┐
-│  Load Processed   │     │  Apply PCA for       │     │  Perform K-means  │     │  Save Results to     │
-│  Feature Files    │────>│  Dimensionality      │────>│  Clustering       │────>│  CSV File            │
-└───────────────────┘     └──────────────────────┘     └───────────────────┘     └──────────────────────┘
-                                                                                            │
-                                                                                            ▼
-                                                                              ┌──────────────────────────┐
-                                                                              │  Launch Recommendation   │
-                                                                              │  UI with Visualization  │
-                                                                              └──────────────────────────┘
+```bash
+python src/features/extract_features.py
 ```
 
-**User Interface Components:**
+### Visualize extracted features
 
-```
-┌────────────────────────────────────────────────────────────────────────────────────┐
-│                           Audio Recommendation System                              │
-├─────────────────────────────┬──────────────────────────────────────────────────────┤
-│                             │                                                      │
-│  🔍 Search Songs:           │                  Cluster Map                         │
-│  [                    ]     │                                                      │
-│                             │        [PCA-based Visualization of Songs             │
-│  🎶 All Songs:              │         with Clusters in Different Colors]           │
-│  ┌───────────────────────┐  │                                                      │
-│  │                       │  │                                                      │
-│  │  Song 1               │  │                                                      │
-│  │  Song 2               │  │                                                      │
-│  │  Song 3               │  │                                                      │
-│  │  ...                  │  ├──────────────────────────────────────────────────────┤
-│  │                       │  │                                                      │
-│  │                       │  │  Recommendations                                     │
-│  │                       │  │  ┌─────────────────────────────────────────────────┐ │
-│  │                       │  │  │ Similar Song 1                                  │ │
-│  │                       │  │  │ Similar Song 2                                  │ │
-│  │                       │  │  │ Similar Song 3                                  │ │
-│  │                       │  │  │ ...                                             │ │
-│  │                       │  │  └─────────────────────────────────────────────────┘ │
-│  └───────────────────────┘  │                                                      │
-│                             │                                                      │
-└─────────────────────────────┴──────────────────────────────────────────────────────┘
+```bash
+python scripts/visualization/ploting.py --features_dir output/features --plots_dir output/plots
 ```
 
-## Pipeline Execution
+### Run clustering directly
 
-**File:** `run_pipeline.py`
-
-This module orchestrates the entire pipeline execution, allowing for specific steps to be skipped if desired. It also lets you choose between different clustering algorithms.
-
-**Process Flow:**
-
-```
-┌──────────────────────────────────────────────────────────────────────────────────────────────┐
-│                                    run_pipeline.py                                           │
-├──────────────┬───────────────────┬────────────────────┬────────────────────┬────────────────┤
-│  Download    │  Extract          │  Process           │  Generate          │  Cluster &     │
-│  Audio Files │  Audio Features   │  Features          │  Visualizations    │  Recommend     │
-├──────────────┼───────────────────┼────────────────────┼────────────────────┼────────────────┤
-│  playlist_   │  extract_         │  process_          │  ploting.py        │  kmeans.py     │
-│  audio_      │  features.py      │  features.py       │                    │                │
-│  download.py │                   │                    │                    │                │
-└──────────────┴───────────────────┴────────────────────┴────────────────────┴────────────────┘
+```bash
+python src/clustering/gmm.py
+python src/clustering/kmeans.py
+python src/clustering/hdbscan.py
+python src/clustering/vade.py
 ```
 
-## Technical Details
+## Notes on Historical Paths
 
-### Feature Extraction Parameters
+The repository still contains historical or compatibility-oriented code paths,
+but they should not override the supported baseline. In particular:
 
-The `feature_vars.py` file defines the following constants:
+- the old duration-only normalizer has been reduced to a compatibility wrapper
+- plotting keeps a legacy mel-spectrogram branch only when those arrays exist
+- helper scripts are now aligned to the processed `.wav` library rather than an
+  `.mp3`-only assumption
 
-- `n_mfcc = 13`: Number of MFCC coefficients
-- `n_fft = 2048`: FFT window size
-- `hop_length = 512`: Hop length for frame-level analysis 
-- `n_mels = 128`: Number of Mel bands for spectrogram
+## Related Docs
 
-### Features Explained
-
-1. **MFCC (Mel-Frequency Cepstral Coefficients)**
-   - Represents timbre and tonal content
-   - Captures spectral shape in a compact form
-   - Highly useful for genre classification
-
-2. **Mel-Spectrogram**
-   - Frequency representation adjusted to human hearing perception
-   - Shows how frequency content changes over time
-   - Captures overall sonic texture
-
-3. **Spectral Centroid**
-   - Represents the "brightness" of sound
-   - Higher values indicate more high-frequency content
-   - Useful for differentiating between "bright" vs. "warm" sounds
-
-4. **Spectral Flatness**
-   - Measures the tonality vs. noise-like quality of sound
-   - Distinguishes between harmonic content and noise
-   - Higher values indicate noise-like qualities
-
-5. **Zero Crossing Rate**
-   - Measures how often the signal changes from positive to negative
-   - Higher for percussive sounds and consonants
-   - Useful for rhythm analysis and voice/music discrimination
-
-### Clustering Approach
-
-The system now focuses on a single, tuned clustering workflow.
-
-#### K-Means Clustering
-- Groups songs with similar audio characteristics
-- Uses weighted feature combination (WKBSC algorithm)
-- Supports dynamic cluster number selection using silhouette score
-
-## Usage
-
-1. **Add YouTube Links**
-   - Create a `links.txt` file with YouTube video or playlist URLs
-
-2. **Run Complete Pipeline**
-   ```
-   python run_pipeline.py
-   ```
-   - Optional explicit flag (defaults to K-Means):
-   ```
-   python run_pipeline.py --clustering-method kmeans
-   ```
-
-3. **Run Specific Steps**
-   - Skip certain steps:
-   ```
-   python run_pipeline.py --skip download extract
-   ```
-
-4. **Run Individual Components**
-   - Download audio: `python src/data_collection/playlist_audio_download.py`
-   - Extract features: `python src/features/extract_features.py`
-   - Create visualizations: `python scripts/ploting.py output/results`
-   - Learn feature weights: `python scripts/wkbsc.py`
-   - Cluster and recommend: `python src/clustering/kmeans.py`
-
-5. **View Recommendations**
-   - After running `kmeans.py`, a graphical UI will open
-   - Select a song to see similar recommendations
-   - Visualize song relationships in the PCA plot
+- [DECISION_POLICY.md](DECISION_POLICY.md)
+- [RECOMMENDED_PRODUCTION_BASELINE.md](RECOMMENDED_PRODUCTION_BASELINE.md)
+- [SUPPORTED_BASELINE.md](SUPPORTED_BASELINE.md)
+- [AUDIO_PREPROCESSING.md](AUDIO_PREPROCESSING.md)
+- [AUDIO_EMBEDDING_EXTRACTION.md](AUDIO_EMBEDDING_EXTRACTION.md)
+- [QUICKSTART_EMBEDDINGS.md](QUICKSTART_EMBEDDINGS.md)
+- [reports/](reports)

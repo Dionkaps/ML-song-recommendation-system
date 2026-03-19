@@ -4,11 +4,86 @@ hop_length = 512
 n_mels = 128  # Kept for compatibility but not used
 n_chroma = 12  # 12-dimensional pitch class profile
 
+# ---------------------------------------------------------------------
+# Supported baseline (2026-03-14)
+# ---------------------------------------------------------------------
+# The actively supported clustering baseline in this workspace is:
+#   - audio-only clustering
+#   - `spectral_plus_beat` handcrafted subset
+#   - per-group StandardScaler + pca_per_group_5
+#   - GMM as the default clustering method
+#
+# Genre remains metadata/evaluation-only, and MSD metadata is disabled by
+# default until the unified songs.csv path is restored and validated.
+supported_clustering_mode = "audio_only_spectral_plus_beat"
+default_clustering_method = "gmm"
+
 include_genre = False  # Keep genre only as metadata/evaluation, never as clustering input by default
 n_genres = 10 # Default fallback. Actual number is calculated dynamically from data.
 
 # Whether to include MSD (Million Song Dataset) metadata features
-include_msd_features = True
+include_msd_features = False
+msd_metadata_policy = "disabled_in_supported_baseline"
+msd_metadata_restore_policy = (
+    "restore_only_as_an_explicit_experiment_after_unified_metadata_audit_passes"
+)
+
+# Explicit handcrafted feature subset used for clustering.
+clustering_feature_subset_name = "spectral_plus_beat"
+clustering_audio_feature_keys = [
+    "spectral_centroid",
+    "spectral_rolloff",
+    "spectral_flux",
+    "spectral_flatness",
+    "zero_crossing_rate",
+    "beat_strength",
+]
+
+# Audio preprocessing invariants for the supported baseline.
+baseline_target_duration_seconds = 29.0
+baseline_target_lufs = -14.0
+# Historical name retained for compatibility. The current preprocessing
+# implementation applies a sample-peak ceiling rather than oversampled dBTP.
+baseline_max_true_peak_dbtp = -1.0
+baseline_sample_rate = 22050
+baseline_output_subtype = "PCM_16"
+baseline_force_mono = True
+
+# ---------------------------------------------------------------------
+# Explicit product decisions (2026-03-15)
+# ---------------------------------------------------------------------
+# Target cluster granularity:
+# keep the product at broad macro-style clusters rather than micro-style
+# fragmentation. The current supported GMM baseline should stay within 4..8
+# occupied clusters, with 4 as the current reference target.
+product_cluster_granularity_policy = "broad_macro_clusters"
+product_cluster_target_min = 4
+product_cluster_target_max = 8
+product_cluster_target_default = 4
+
+# Minimum acceptable stability gate for a production-default GMM model.
+gmm_min_subsample_median_ari = 0.90
+gmm_min_subsample_mean_ari = 0.75
+gmm_min_reference_median_ari = 0.90
+gmm_min_per_cluster_median_jaccard = 0.90
+
+# Uncertain GMM assignments stay visible by default. Posterior-weighted ranking
+# and hard thresholds remain available as optional operator controls, but the
+# supported baseline keeps distance ranking as the product default because it
+# preserves better proxy recommendation quality and catalog breadth.
+uncertain_gmm_assignment_policy = "show_normally_with_optional_controls"
+default_recommendation_ranking_method = "distance"
+default_min_assignment_confidence = 0.0
+default_min_selected_cluster_posterior = 0.0
+
+# MSD numeric metadata should return only as an explicit experiment after
+# coverage is nearly complete and the metadata path passes audit checks.
+msd_restore_min_live_audio_coverage = 0.98
+msd_restore_max_missing_audio_rows = 100
+msd_restore_require_clean_schema_audit = True
+msd_restore_require_explicit_experiment_profile = True
+msd_restore_require_fresh_comparison_run = True
+msd_restore_require_no_silent_fallback = True
 
 # ---------------------------------------------------------------------
 # Feature Groups for Extraction

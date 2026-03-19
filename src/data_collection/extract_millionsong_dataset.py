@@ -21,6 +21,10 @@ def get_song_info_from_h5(h5_file_path):
     """Extract song name and genre from HDF5 file"""
     try:
         with h5py.File(h5_file_path, 'r') as h5:
+            track_id = h5['analysis']['songs']['track_id'][0]
+            if isinstance(track_id, bytes):
+                track_id = track_id.decode('utf-8', errors='ignore')
+
             # Get song title
             title = h5['metadata']['songs']['title'][0]
             if isinstance(title, bytes):
@@ -42,6 +46,7 @@ def get_song_info_from_h5(h5_file_path):
             genre = ', '.join(terms) if terms else 'Unknown'
             
             return {
+                'track_id': track_id,
                 'title': title,
                 'artist': artist,
                 'genre': genre
@@ -93,7 +98,7 @@ def main():
     # Write to CSV
     print(f"\nWriting {len(songs_data)} songs to CSV...")
     with open(output_csv, 'w', newline='', encoding='utf-8') as csvfile:
-        fieldnames = ['title', 'artist', 'genre']
+        fieldnames = ['track_id', 'title', 'artist', 'genre']
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         
         writer.writeheader()

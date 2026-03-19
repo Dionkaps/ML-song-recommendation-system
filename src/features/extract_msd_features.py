@@ -21,6 +21,8 @@ from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from tqdm import tqdm
 
+from src.utils.song_metadata import ensure_unified_songs_schema
+
 
 # Feature dimensions
 KEY_DIM = 12          # One-hot encoding
@@ -153,7 +155,7 @@ def process_all_msd_files(msd_root: str, output_dir: str = None, n_workers: int 
 
 def update_unified_csv_with_msd_features(msd_df: pd.DataFrame, unified_path: str):
     """Update existing unified CSV with MSD features."""
-    unified = pd.read_csv(unified_path)
+    unified = ensure_unified_songs_schema(pd.read_csv(unified_path))
     
     # Create lookup by track_id
     msd_lookup = msd_df.set_index('track_id').to_dict('index')
@@ -171,28 +173,38 @@ def update_unified_csv_with_msd_features(msd_df: pd.DataFrame, unified_path: str
             unified.loc[idx, 'mode_confidence'] = msd_data['mode_confidence']
             updated += 1
     
+    unified = ensure_unified_songs_schema(unified)
     unified.to_csv(unified_path, index=False)
     print(f"Updated {updated} rows in unified CSV with MSD features")
 
 
 def create_initial_unified_csv(msd_df: pd.DataFrame, unified_path: str):
     """Create initial unified CSV from MSD features."""
-    unified = pd.DataFrame({
-        'msd_track_id': msd_df['track_id'],
-        'msd_artist': msd_df['artist'],
-        'msd_title': msd_df['title'],
-        'deezer_artist': None,
-        'deezer_title': None,
-        'filename': None,
-        'genre': None,
-        'key': msd_df['key'],
-        'mode': msd_df['mode'],
-        'loudness': msd_df['loudness'],
-        'tempo': msd_df['tempo'],
-        'key_confidence': msd_df['key_confidence'],
-        'mode_confidence': msd_df['mode_confidence'],
-        'has_audio': False
-    })
+    unified = ensure_unified_songs_schema(
+        pd.DataFrame(
+            {
+                'msd_track_id': msd_df['track_id'],
+                'msd_artist': msd_df['artist'],
+                'msd_title': msd_df['title'],
+                'deezer_artist': '',
+                'deezer_title': '',
+                'filename': '',
+                'audio_basename': '',
+                'audio_extension': '',
+                'genre': '',
+                'key': msd_df['key'],
+                'mode': msd_df['mode'],
+                'loudness': msd_df['loudness'],
+                'tempo': msd_df['tempo'],
+                'key_confidence': msd_df['key_confidence'],
+                'mode_confidence': msd_df['mode_confidence'],
+                'has_audio': False,
+                'metadata_origin': 'msd_features_bootstrap',
+                'genre_source': '',
+                'audio_match_source': '',
+            }
+        )
+    )
     unified.to_csv(unified_path, index=False)
     print(f"Created initial unified CSV with {len(unified)} MSD tracks")
 
@@ -277,8 +289,7 @@ def load_msd_features(data_dir: str = None) -> tuple:
     # Try unified CSV first
     unified_path = os.path.join(data_dir, 'songs.csv')
     if os.path.exists(unified_path):
-        df = pd.read_csv(unified_path)
-        # Rename columns to match expected format
+        df = ensure_unified_songs_schema(pd.read_csv(unified_path))
         df = df.rename(columns={'msd_track_id': 'track_id'})
     else:
         # Fallback to legacy msd_features.csv

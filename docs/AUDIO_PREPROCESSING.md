@@ -1,218 +1,172 @@
 # Audio Preprocessing Module
 
-This module provides a robust audio preprocessing pipeline for Music Information Retrieval (MIR) tasks, ensuring **consistency and fairness** across all audio tracks before feature extraction and clustering.
+This module provides the supported preprocessing pipeline for the workspace's
+handcrafted-audio baseline.
 
 ## Overview
 
-The preprocessing pipeline normalizes audio files to ensure:
-- **Consistent duration**: All files are exactly 29 seconds
-- **Consistent loudness**: All files normalized to -14 LUFS (ITU-R BS.1770)
-- **No clipping**: True Peak limited to -1.0 dBTP (EBU R128 compliant)
+The preprocessing pipeline enforces these baseline invariants:
 
-## Why is Audio Preprocessing Important?
+- consistent duration: all retained files are exactly `29` seconds
+- consistent loudness: files are normalized toward `-14 LUFS`
+- consistent format: output is mono `22050 Hz` `PCM_16` WAV
+- peak safety: a `-1.0 dBFS` sample-peak ceiling is applied after loudness gain
 
-In MIR tasks, especially clustering-based recommendation systems, **inconsistent audio levels and durations can bias feature extraction**:
+## Important Accuracy Note
 
-1. **Loudness Variations**: A quiet jazz track and a loud rock track will have different MFCC magnitudes even if they have similar timbral characteristics
-2. **Duration Differences**: Longer tracks may have more varied features, affecting clustering
-3. **Clipping/Distortion**: Over-driven audio can introduce artifacts in spectral features
+The current implementation measures integrated loudness with `pyloudnorm`
+following ITU-R BS.1770, but peak protection is based on sample peak. It does
+not perform oversampled true-peak measurement or limiting.
 
-## Standards Compliance
+Why this matters:
 
-| Standard | Description | Our Implementation |
-|----------|-------------|-------------------|
-| **ITU-R BS.1770-4** | Algorithm for measuring audio loudness | Used via `pyloudnorm` library |
-| **EBU R128** | Loudness normalization standard | Target: -14 LUFS, True Peak: -1.0 dBTP |
+- the historical parameter name `max_true_peak` is still present in code and
+  configs for backward compatibility
+- documentation should read that value as a sample-peak ceiling, not a formal
+  dBTP true-peak guarantee
 
-### Target Loudness: -14 LUFS
+## Why Preprocessing Matters
 
-We use -14 LUFS as the target because:
-- It's the standard for major streaming platforms (Spotify, YouTube)
-- Provides good dynamic range for feature extraction
-- Prevents over-compression of dynamics
+In MIR and clustering workflows, inconsistent audio levels and durations can
+distort the feature space:
 
-### True Peak Limiting: -1.0 dBTP
+1. Loud tracks can dominate magnitude-sensitive summaries.
+2. Longer clips can contain more variation than short previews.
+3. Mixed sample rates, channels, and codecs create avoidable extraction drift.
 
-True Peak limiting at -1.0 dBTP:
-- Prevents inter-sample peaks from causing distortion
-- Provides headroom for codec artifacts
-- Is the EBU R128 recommendation for broadcast
+## Current Module Layout
 
-## Module Structure
-
-```
+```text
 src/audio_preprocessing/
-├── __init__.py              # Package exports
-├── processor.py             # Main AudioPreprocessor class
-├── duration_handler.py      # Duration validation & cropping
-└── loudness_normalizer.py   # LUFS normalization & peak limiting
+|- __init__.py
+|- processor.py
+|- duration_handler.py
+`- loudness_normalizer.py
 ```
 
 ## Quick Start
 
-### Basic Usage
+### Supported runner
+
+```bash
+python scripts/run_audio_preprocessing.py --audio-dir audio_files
+```
+
+### Direct usage
 
 ```python
 from src.audio_preprocessing import AudioPreprocessor
 
-# Initialize with default settings
-processor = AudioPreprocessor()
-
-# Process a single file
-result = processor.process_file("path/to/audio.mp3")
-print(f"Status: {result['status']}")
-print(f"Original LUFS: {result['original_lufs']}")
-print(f"Final LUFS: {result['final_lufs']}")
-
-# Process entire directory
-stats = processor.process_directory("audio_files/")
-print(f"Processed: {stats['processed']} files")
-```
-
-### Custom Settings
-
-```python
 processor = AudioPreprocessor(
-    target_duration=29.0,    # Target duration in seconds
-    target_lufs=-14.0,       # Target loudness in LUFS
-    max_true_peak=-1.0,      # Maximum true peak in dBTP
-    sample_rate=22050        # Sample rate for processing
+    target_duration=29.0,
+    target_lufs=-14.0,
+    max_true_peak=-1.0,  # legacy name; acts as a sample-peak ceiling
+    sample_rate=22050,
 )
+
+result = processor.process_file("path/to/audio.wav")
+print(result["status"])
 ```
 
-### Getting Detailed Results
+### Detailed per-file output
 
 ```python
-stats = processor.process_directory("audio_files/", return_details=True)
-
-# Access per-file results
-for detail in stats['details']:
-    print(f"{detail['file']}: {detail['status']}")
-    print(f"  Original: {detail['original_lufs']} LUFS, {detail['original_duration']}s")
-    print(f"  Final: {detail['final_lufs']} LUFS, {detail['final_duration']}s")
-    print(f"  Actions: {detail['actions']}")
+stats = processor.process_directory("audio_files", return_details=True)
+for detail in stats["details"]:
+    print(detail["file"], detail["actions"])
 ```
 
 ## Pipeline Steps
 
-### 1. Audio Loading
-- Loads audio file using `librosa`
-- Resamples to target sample rate (default: 22050 Hz)
-- Converts to mono
+### 1. Load audio
 
-### 2. Duration Handling
-- **< 29s**: File is **removed** (too short for consistent features)
-- **= 29s**: No change
-- **> 29s**: **Cropped** to first 29 seconds
+- loads `.wav`, `.mp3`, `.flac`, and `.m4a`
+- resamples to `22050 Hz`
+- converts to mono
 
-### 3. Loudness Normalization
-1. Measure integrated loudness using ITU-R BS.1770
-2. Calculate gain needed to reach -14 LUFS
-3. Apply gain
-4. Check if peak exceeds -1.0 dBTP
-5. If so, reduce gain (may result in slightly lower loudness)
+### 2. Enforce duration
 
-### 4. Save
-- Overwrites original file with processed audio
-- Saved as WAV format at the target sample rate
+- `< 29s`: remove the file from the processed library
+- `= 29s`: keep as-is
+- `> 29s`: crop to the first `29s`
 
-## Processing Results
+### 3. Normalize loudness
 
-Each processed file returns a result dictionary:
+1. measure integrated loudness with ITU-R BS.1770
+2. compute gain toward `-14 LUFS`
+3. apply gain
+4. if the resulting sample peak exceeds the configured ceiling, reduce gain
+
+Tracks that hit the peak ceiling may finish slightly below the loudness target.
+
+### 4. Save normalized audio
+
+- output format is WAV
+- output subtype is `PCM_16`
+- non-WAV sources are converted to `.wav`
+
+## Result Structure
+
+Each processed file returns a dictionary like:
 
 ```python
 {
-    'file': 'song.mp3',
-    'status': 'success',  # or 'removed', 'error'
-    'actions': ['cropped', 'normalized'],
-    'original_duration': 35.0,
-    'final_duration': 29.0,
-    'original_lufs': -18.5,
-    'final_lufs': -14.0,
-    'original_peak_db': -6.2,
-    'final_peak_db': -1.7,
-    'gain_applied_db': 4.5,
-    'error': None
+    "file": "song.wav",
+    "status": "success",
+    "actions": ["cropped", "normalized"],
+    "original_duration": 35.0,
+    "final_duration": 29.0,
+    "original_lufs": -18.5,
+    "final_lufs": -14.0,
+    "original_peak_db": -6.2,
+    "final_peak_db": -1.7,
+    "gain_applied_db": 4.5,
+    "error": None,
 }
 ```
 
-### Possible Actions
+`original_peak_db` and `final_peak_db` are sample-peak measurements in dBFS.
 
-| Action | Description |
-|--------|-------------|
-| `cropped` | Duration was reduced to target |
-| `normalized` | Loudness was adjusted to target LUFS |
-| `peak_limited` | Gain was reduced to meet True Peak limit |
-| `skipped_silence` | File was silent, no normalization applied |
-| `removed_too_short` | File was deleted (below minimum duration) |
+## Actions
 
-## Integration with Pipeline
+| Action | Meaning |
+|---|---|
+| `cropped` | Duration was reduced to the target |
+| `normalized` | Loudness gain was applied |
+| `peak_limited` | Gain was reduced to satisfy the sample-peak ceiling |
+| `skipped_silence` | File was silent, so no gain change was applied |
+| `removed_too_short` | File was deleted for being below the minimum duration |
+| `converted_to_wav` | Source format was converted to WAV on write-back |
 
-The preprocessing step is integrated into `run_pipeline.py`:
+## Integration
+
+The preprocessing step is part of [run_pipeline.py](/c:/Users/vpddk/Desktop/Me/Github/ML-song-recommendation-system/run_pipeline.py).
+
+Examples:
 
 ```bash
-# Run full pipeline including preprocessing
 python run_pipeline.py
-
-# Skip download, only run preprocessing
-python run_pipeline.py --skip download extract process plot cluster
-
-# Skip preprocessing if already done
+python run_pipeline.py --skip download extract plot cluster
 python run_pipeline.py --skip preprocess
 ```
 
-## Testing
+## Legacy Paths
 
-Run the demo test to see the pipeline in action:
-
-```bash
-python -m tests.test_preprocessing_demo
-```
-
-Run unit tests:
-
-```bash
-python -m tests.test_preprocessing_small
-```
-
-## Example Output
-
-```
-============================================================
-AUDIO PREPROCESSING
-============================================================
-Files to process: 6
-Workers: 4
-Target Duration: 29.0s
-Target Loudness: -14.0 LUFS
-Max True Peak: -1.0 dBTP
-============================================================
-
-Preprocessing: 100%|████████████████████| 6/6 [00:03<00:00,  1.93it/s]
-
-============================================================
-PREPROCESSING SUMMARY
-============================================================
-Total files:      6
-Processed:        5
-  - Cropped:      2
-  - Normalized:   5
-  - Peak Limited: 0
-Removed (short):  1
-Errors:           0
-============================================================
-```
+- `src/utils/audio_normalizer.py` now acts as a compatibility wrapper around the
+  supported preprocessing pipeline
+- old docs/scripts that described "true peak" behavior should be interpreted as
+  sample-peak protection unless they explicitly describe oversampling
 
 ## Dependencies
 
-- `librosa>=0.9.0`: Audio loading and duration calculation
-- `soundfile>=0.10.0`: Audio file writing
-- `pyloudnorm>=0.1.0`: ITU-R BS.1770 loudness measurement
-- `numpy>=1.21.0`: Numerical operations
-- `tqdm>=4.0.0`: Progress bars
+- `librosa`
+- `soundfile`
+- `pyloudnorm`
+- `numpy`
+- `tqdm`
 
 ## References
 
-1. **ITU-R BS.1770-4**: [Algorithms to measure audio programme loudness and true-peak audio level](https://www.itu.int/rec/R-REC-BS.1770)
-2. **EBU R128**: [Loudness normalisation and permitted maximum level of audio signals](https://tech.ebu.ch/docs/r/r128.pdf)
-3. **pyloudnorm**: [Python implementation of ITU-R BS.1770-4](https://github.com/csteinmetz1/pyloudnorm)
+1. ITU-R BS.1770-4
+2. EBU R128
+3. `pyloudnorm`

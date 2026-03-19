@@ -9,12 +9,13 @@ Pipeline Steps:
 1. Load audio file (resampled to target sample rate, converted to mono)
 2. Duration validation and cropping (default: 29 seconds)
 3. Loudness normalization (ITU-R BS.1770, default: -14 LUFS)
-4. True Peak limiting (EBU R128 compliant, default: -1.0 dBTP)
+4. Sample-peak safety cap (default: -1.0 dBFS)
 5. Save processed audio
 
 Standards Compliance:
 - ITU-R BS.1770-4: Loudness measurement
-- EBU R128: Loudness normalization and maximum level
+- EBU R128: used as the target reference for loudness/peak policy, but this
+  implementation does not perform oversampled true-peak measurement
 
 Usage:
     from src.audio_preprocessing import AudioPreprocessor
@@ -26,7 +27,7 @@ Usage:
     )
     
     # Process single file
-    result = processor.process_file("path/to/audio.mp3")
+    result = processor.process_file("path/to/audio.wav")
     
     # Process directory
     stats = processor.process_directory("path/to/audio_dir")
@@ -34,6 +35,8 @@ Usage:
 
 import os
 import logging
+import io
+import sys
 import warnings
 from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -56,11 +59,6 @@ warnings.filterwarnings("ignore")
 logging.getLogger("audioread").setLevel(logging.ERROR)
 logging.getLogger("librosa").setLevel(logging.ERROR)
 
-# Redirect stderr to suppress C-level mpg123 warnings
-import sys
-import os
-import io
-
 class _SuppressStderr:
     """Context manager to suppress stderr (catches C-level warnings from mpg123)"""
     def __init__(self):
@@ -79,6 +77,8 @@ class _SuppressStderr:
 
 
 class AudioPreprocessor:
+    SUPPORTED_AUDIO_EXTENSIONS = (".wav", ".mp3", ".flac", ".m4a")
+
     def __init__(
         self,
         target_duration: float = 29.0,
@@ -94,8 +94,8 @@ class AudioPreprocessor:
                             Deezer previews are typically 30s, so 29s allows margin.
             target_lufs: Target Integrated Loudness in LUFS (default: -14.0)
                         -14 LUFS is standard for streaming platforms.
-            max_true_peak: Maximum True Peak in dBTP (default: -1.0)
-                          -1.0 dBTP provides headroom and prevents clipping.
+            max_true_peak: Sample-peak ceiling in dBFS (default: -1.0).
+                          The legacy parameter name is retained for compatibility.
             sample_rate: Sample rate for processing (default: 22050)
                         22050 Hz is standard for MIR feature extraction.
         
@@ -118,11 +118,11 @@ class AudioPreprocessor:
         Pipeline:
         1. Load audio (resample to target SR, convert to mono)
         2. Check duration and crop if needed
-        3. Normalize loudness (LUFS) with True Peak protection
+        3. Normalize loudness (LUFS) with sample-peak protection
         4. Save processed audio back to disk (overwrites original)
 
         Args:
-            file_path: Path to the audio file (MP3, WAV, FLAC, etc.)
+            file_path: Path to the audio file (WAV, MP3, FLAC, M4A, etc.)
 
         Returns:
             Dictionary with processing statistics:
@@ -233,7 +233,10 @@ class AudioPreprocessor:
             return {'error': 'Directory not found'}
 
         # Find all audio files
-        files = list(dir_path.glob("*.mp3")) + list(dir_path.glob("*.wav"))
+        files = []
+        for extension in self.SUPPORTED_AUDIO_EXTENSIONS:
+            files.extend(dir_path.glob(f"*{extension}"))
+        files = sorted(files)
         
         if not files:
             logger.warning(f"No audio files found in {directory}")
@@ -261,7 +264,11 @@ class AudioPreprocessor:
         print(f"Workers: {max_workers}")
         print(f"Target Duration: {self.duration_handler.target_duration}s")
         print(f"Target Loudness: {self.loudness_normalizer.target_lufs} LUFS")
-        print(f"Max True Peak: {self.loudness_normalizer.max_true_peak} dBTP")
+        print(
+            "Peak Ceiling: "
+            f"{self.loudness_normalizer.max_true_peak} dBFS sample peak "
+            "(legacy config name: max_true_peak)"
+        )
         print(f"{'='*60}\n")
 
         with ProcessPoolExecutor(max_workers=max_workers) as executor:
@@ -308,7 +315,9 @@ class AudioPreprocessor:
 if __name__ == "__main__":
     # Example usage
     import argparse
-    parser = argparse.ArgumentParser(description="Audio Preprocessing: Crop & Normalize")
+    parser = argparse.ArgumentParser(
+        description="Audio preprocessing: crop, loudness-normalize, and apply a sample-peak safety cap."
+    )
     parser.add_argument("--dir", required=True, help="Directory containing audio files")
     parser.add_argument("--lufs", type=float, default=-14.0, help="Target LUFS")
     parser.add_argument("--duration", type=float, default=29.0, help="Target duration in seconds")

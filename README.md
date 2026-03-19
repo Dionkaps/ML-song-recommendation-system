@@ -2,6 +2,24 @@
 
 A machine learning project that analyzes audio files to create a content-based music recommendation system using deep learning embeddings and clustering algorithms.
 
+## Current Supported Baseline
+
+The actively supported clustering baseline in this workspace is:
+
+- audio-only clustering
+- handcrafted `spectral_plus_beat` features for clustering
+- per-group `StandardScaler` + `pca_per_group_5`
+- `GMM` as the default clustering method
+- genre kept as metadata only
+- MSD metadata disabled by default until `data/songs.csv` is restored
+- preprocessing invariants: mono, `22050 Hz`, `29s`, `PCM_16`, loudness-normalized
+
+Historical sections below still mention older and experimental paths. Use the supported baseline above as the source of truth for the current workspace state.
+
+See [docs/SUPPORTED_BASELINE.md](docs/SUPPORTED_BASELINE.md) for the detailed baseline contract.
+See [docs/RECOMMENDED_PRODUCTION_BASELINE.md](docs/RECOMMENDED_PRODUCTION_BASELINE.md) for the short production-default summary and explicit comparison baselines.
+See [docs/DECISION_POLICY.md](docs/DECISION_POLICY.md) for the explicit cluster-granularity, stability-gate, uncertainty-handling, and MSD-return decisions.
+
 ## Key Features
 
 - **🎵 Deep Audio Embeddings**: Extract rich audio representations using state-of-the-art models (EnCodecMAE, MERT, MusiCNN)
@@ -83,18 +101,19 @@ python run_pipeline.py
 ```
 
 This will:
-- Extract audio features from files in `genres_original/`
-- Process and visualize the features
-- Run the weighted K-Means (WKBSC) clustering algorithm
-- Launch the recommendation UI
+- Optionally download and preprocess audio in `audio_files/`
+- Extract handcrafted audio features
+- Generate feature visualizations
+- Run the default GMM clustering pipeline
+- Produce clustering outputs used by the recommendation UI
 
 ### 3. Choose Clustering Method
 ```bash
-# K-Means (default)
-python run_pipeline.py --clustering-method kmeans
-
-# Gaussian Mixture Model
+# Gaussian Mixture Model (default supported baseline)
 python run_pipeline.py --clustering-method gmm
+
+# K-Means
+python run_pipeline.py --clustering-method kmeans
 
 # HDBSCAN (density-based)
 python run_pipeline.py --clustering-method hdbscan
@@ -111,7 +130,7 @@ python run_pipeline.py --skip extract plot
 ## Features
 
 - **Multiple Clustering Algorithms**: K-Means, GMM, HDBSCAN, and VaDE (deep learning)
-- **Rich Audio Features**: MFCC, Mel-spectrograms, spectral descriptors
+- **Rich Audio Features**: MFCC families, spectral descriptors, chroma, and beat/rhythm summaries
 - **Interactive UI**: Browse songs, get recommendations, play audio
 - **Visualization**: PCA-based 2D visualization of clusters
 - **Deep Learning**: VaDE combines VAE and GMM for joint feature learning and clustering
@@ -123,18 +142,20 @@ python run_pipeline.py --skip extract plot
 - **GMM** (`src/clustering/gmm.py`): Probabilistic clustering with Gaussian Mixture Models
 - **HDBSCAN** (`src/clustering/hdbscan.py`): Density-based clustering with noise detection
 - **VaDE** (`src/clustering/vade.py`): Deep learning approach combining VAE and GMM
-- **WKBSC** (`scripts/wkbsc.py`): Weighted K-Means with feature importance learning
 
 ### Feature Extraction
 The system extracts these audio features:
 
 **Traditional Features:**
 - **MFCC** (Mel-frequency cepstral coefficients)
-- **Mel-spectrogram**
+- **Delta / Delta-Delta MFCC**
 - **Spectral centroid**
+- **Spectral rolloff**
+- **Spectral flux**
 - **Spectral flatness**
 - **Zero-crossing rate**
-- **Genre** (one-hot encoded)
+- **Chroma**
+- **Beat strength / onset summaries**
 
 **Deep Learning Embeddings:**
 - **EnCodecMAE** - Self-supervised audio representations (768-dim)
@@ -149,7 +170,7 @@ Edit `config/feature_vars.py` to adjust:
 n_mfcc = 13      # Number of MFCC coefficients
 n_fft = 2048     # FFT window size
 hop_length = 512 # Hop length for STFT
-n_mels = 128     # Number of mel bands
+n_mels = 128     # Compatibility-only; the active handcrafted baseline does not use mel-spectrogram features
 ```
 
 ## Usage Examples
@@ -174,14 +195,9 @@ python src/clustering/hdbscan.py
 python src/clustering/vade.py
 ```
 
-### Learn Feature Weights (WKBSC)
-```bash
-python scripts/wkbsc.py
-```
-
 ### Visualize Features
 ```bash
-python scripts/ploting.py output/results
+python scripts/visualization/ploting.py --features_dir output/features --plots_dir output/plots
 ```
 
 ## Output Files
@@ -222,7 +238,9 @@ See `requirements.txt` for specific versions.
 | [Audio Embedding Extraction](docs/AUDIO_EMBEDDING_EXTRACTION.md) | Complete guide to extracting deep audio embeddings |
 | [Quick Start: Embeddings](docs/QUICKSTART_EMBEDDINGS.md) | 5-minute setup for embedding extraction |
 | [VaDE Implementation](docs/VADE_IMPLEMENTATION.md) | Deep learning clustering with VAE+GMM |
-| [Feature Weights Guide](docs/FEATURE_WEIGHTS_GUIDE.md) | Guide to WKBSC feature weighting |
+| [Supported Baseline](docs/SUPPORTED_BASELINE.md) | Current supported clustering and preprocessing contract |
+| [Recommended Production Baseline](docs/RECOMMENDED_PRODUCTION_BASELINE.md) | Short production-default summary plus explicit comparison baselines |
+| [Decision Policy](docs/DECISION_POLICY.md) | Explicit product decisions for cluster granularity, stability gates, uncertainty handling, and MSD restoration |
 
 ## License
 

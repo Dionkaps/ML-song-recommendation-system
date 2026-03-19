@@ -4,7 +4,7 @@ Duration Handler for Audio Preprocessing.
 This module handles audio duration validation and cropping to ensure
 all audio files are exactly the target duration (default: 29 seconds).
 
-Part of the EBU R128 compliant audio preprocessing pipeline.
+Part of the workspace audio preprocessing pipeline.
 """
 
 import logging

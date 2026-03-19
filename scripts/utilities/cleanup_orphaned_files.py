@@ -1,111 +1,200 @@
 """
-Cleanup orphaned MP3 files that don't have entries in unified songs.csv
+Cleanup orphaned local audio files that do not map to unified metadata.
+
+The current workspace keeps processed audio primarily as WAV files, but this
+script also understands legacy MP3/FLAC/M4A files. Matching is done by audio
+basename so a processed `.wav` file still matches metadata rows that may have
+originated from older preview downloads.
 """
-import os
+
+import argparse
 import csv
+import os
 import sys
+from collections import Counter
 from pathlib import Path
+from typing import Dict, Iterable, List, Set
 
-# Ensure we are running from project root
-project_root = Path(__file__).resolve().parent.parent.parent
-os.chdir(project_root)
-sys.path.insert(0, str(project_root))
 
-AUDIO_FOLDER = "audio_files"
-# Try unified CSV first, then legacy
-CSV_FILE = os.path.join("data", "songs.csv")
-if not os.path.exists(CSV_FILE):
-    CSV_FILE = os.path.join("data", "songs_data_with_genre.csv")
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+os.chdir(PROJECT_ROOT)
+sys.path.insert(0, str(PROJECT_ROOT))
 
-def cleanup_orphaned_files(auto_confirm=False):
-    """Remove MP3 files that aren't in the CSV"""
-    
-    # Load filenames from CSV
-    csv_filenames = set()
-    try:
-        with open(CSV_FILE, 'r', encoding='utf-8') as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                filename = row.get('filename', '').strip()
-                if filename:
-                    csv_filenames.add(filename)
-        print(f"Found {len(csv_filenames)} songs in {CSV_FILE}")
-    except Exception as e:
-        print(f"Error reading CSV: {e}")
-        return
-    
-    # Get all MP3 files in audio folder
-    mp3_files = set()
-    if os.path.exists(AUDIO_FOLDER):
-        for filename in os.listdir(AUDIO_FOLDER):
-            if filename.lower().endswith('.mp3'):
-                mp3_files.add(filename)
-        print(f"Found {len(mp3_files)} MP3 files in {AUDIO_FOLDER}/")
-    else:
-        print(f"Error: {AUDIO_FOLDER}/ folder not found")
-        return
-    
-    # Find orphaned files (in folder but not in CSV)
-    orphaned = mp3_files - csv_filenames
-    
-    if not orphaned:
-        print("\n✓ No orphaned files found! All MP3s have CSV entries.")
-        return
-    
-    print(f"\n⚠️ Found {len(orphaned)} orphaned MP3 files without CSV entries:")
+AUDIO_FOLDER = Path("audio_files")
+SUPPORTED_AUDIO_EXTENSIONS = {".wav", ".mp3", ".flac", ".m4a"}
+
+
+def resolve_csv_file() -> Path | None:
+    candidates = [
+        Path("data") / "songs.csv",
+        Path("data") / "songs_data_with_genre.csv",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def csv_row_has_audio(row: Dict[str, str]) -> bool:
+    has_audio_raw = str(row.get("has_audio", "")).strip()
+    has_audio = has_audio_raw.lower()
+    if has_audio_raw:
+        return has_audio in {"true", "1", "yes"}
+
+    filename = str(row.get("filename", "")).strip()
+    return bool(filename)
+
+
+def row_to_audio_basename(row: Dict[str, str]) -> str | None:
+    explicit_basename = str(row.get("audio_basename", "")).strip()
+    if explicit_basename:
+        return explicit_basename
+
+    filename = str(row.get("filename", "")).strip()
+    if filename:
+        return Path(filename).stem
+
+    return None
+
+
+def load_csv_audio_basenames(csv_file: Path) -> Set[str]:
+    basenames: Set[str] = set()
+    with csv_file.open("r", encoding="utf-8", newline="") as handle:
+        for row in csv.DictReader(handle):
+            if not csv_row_has_audio(row):
+                continue
+            basename = row_to_audio_basename(row)
+            if basename:
+                basenames.add(basename)
+    return basenames
+
+
+def iter_audio_files(audio_folder: Path) -> Iterable[Path]:
+    if not audio_folder.exists():
+        return []
+    return sorted(
+        file_path
+        for file_path in audio_folder.iterdir()
+        if file_path.is_file() and file_path.suffix.lower() in SUPPORTED_AUDIO_EXTENSIONS
+    )
+
+
+def collect_audio_file_index(audio_folder: Path) -> Dict[str, List[Path]]:
+    indexed: Dict[str, List[Path]] = {}
+    for path in iter_audio_files(audio_folder):
+        indexed.setdefault(path.stem, []).append(path)
+    return indexed
+
+
+def summarize_extensions(paths: Iterable[Path]) -> str:
+    counts = Counter(path.suffix.lower() for path in paths)
+    if not counts:
+        return "none"
+    return ", ".join(f"{ext}:{count}" for ext, count in sorted(counts.items()))
+
+
+def cleanup_orphaned_files(auto_confirm: bool = False, dry_run: bool = False) -> Dict[str, int]:
+    csv_file = resolve_csv_file()
+    if csv_file is None:
+        print("Error: no metadata CSV was found in data/.")
+        return {"deleted": 0, "orphaned": 0, "catalog_audio_rows": 0, "audio_files": 0}
+
+    if not AUDIO_FOLDER.exists():
+        print(f"Error: {AUDIO_FOLDER}/ folder not found.")
+        return {"deleted": 0, "orphaned": 0, "catalog_audio_rows": 0, "audio_files": 0}
+
+    catalog_basenames = load_csv_audio_basenames(csv_file)
+    indexed_audio = collect_audio_file_index(AUDIO_FOLDER)
+    all_audio_files = [path for paths in indexed_audio.values() for path in paths]
+    orphaned_basenames = sorted(set(indexed_audio) - catalog_basenames)
+    orphaned_files = [path for basename in orphaned_basenames for path in indexed_audio[basename]]
+
+    print(f"Using metadata CSV: {csv_file}")
+    print(f"Audio-backed metadata rows: {len(catalog_basenames)}")
+    print(
+        f"Detected local audio files: {len(all_audio_files)} "
+        f"({summarize_extensions(all_audio_files)})"
+    )
+
+    if not orphaned_files:
+        print("\nNo orphaned audio files found. Local audio matches metadata basenames.")
+        return {
+            "deleted": 0,
+            "orphaned": 0,
+            "catalog_audio_rows": len(catalog_basenames),
+            "audio_files": len(all_audio_files),
+        }
+
+    print(f"\nFound {len(orphaned_files)} orphaned audio files across {len(orphaned_basenames)} basenames:")
     print("=" * 60)
-    
-    # Show sample
-    print(f"\nFirst 10 orphaned files:")
-    for i, filename in enumerate(list(orphaned)[:10]):
-        print(f"  - {filename}")
-    if len(orphaned) > 10:
-        print(f"  ... and {len(orphaned) - 10} more")
-    
-    print("\n" + "=" * 60)
-    
-    # Ask for confirmation (unless auto-confirm is enabled)
-    if auto_confirm:
-        response = 'yes'
-        print(f"Auto-confirming deletion of {len(orphaned)} files...")
-    else:
-        response = input(f"\nDelete all {len(orphaned)} orphaned files? (yes/no): ").strip().lower()
-    
-    if response == 'yes':
-        deleted = 0
-        failed = 0
-        for filename in orphaned:
-            filepath = os.path.join(AUDIO_FOLDER, filename)
-            try:
-                os.remove(filepath)
-                deleted += 1
-            except Exception as e:
-                print(f"Failed to delete {filename}: {e}")
-                failed += 1
-        
-        print(f"\n✓ Cleanup complete!")
-        print(f"  - Deleted: {deleted} files")
-        if failed > 0:
-            print(f"  - Failed: {failed} files")
-        
-        # Verify counts match now
-        remaining_mp3s = len([f for f in os.listdir(AUDIO_FOLDER) if f.lower().endswith('.mp3')])
-        print(f"\nFinal counts:")
-        print(f"  - MP3 files: {remaining_mp3s}")
-        print(f"  - CSV entries: {len(csv_filenames)}")
-        
-        if remaining_mp3s == len(csv_filenames):
-            print(f"\n✓ SUCCESS! Counts now match perfectly!")
-        else:
-            print(f"\n⚠️ Warning: Counts still don't match (difference: {abs(remaining_mp3s - len(csv_filenames))})")
-    else:
+    for path in orphaned_files[:10]:
+        print(f"  - {path.name}")
+    if len(orphaned_files) > 10:
+        print(f"  ... and {len(orphaned_files) - 10} more")
+    print("=" * 60)
+
+    if dry_run:
+        print("\nDry run only. No files were deleted.")
+        return {
+            "deleted": 0,
+            "orphaned": len(orphaned_files),
+            "catalog_audio_rows": len(catalog_basenames),
+            "audio_files": len(all_audio_files),
+        }
+
+    response = "yes" if auto_confirm else input(
+        f"\nDelete all {len(orphaned_files)} orphaned audio files? (yes/no): "
+    ).strip().lower()
+
+    if response != "yes":
         print("\nCleanup cancelled. No files were deleted.")
+        return {
+            "deleted": 0,
+            "orphaned": len(orphaned_files),
+            "catalog_audio_rows": len(catalog_basenames),
+            "audio_files": len(all_audio_files),
+        }
+
+    deleted = 0
+    failed = 0
+    for path in orphaned_files:
+        try:
+            path.unlink()
+            deleted += 1
+        except Exception as exc:
+            print(f"Failed to delete {path.name}: {exc}")
+            failed += 1
+
+    remaining_audio_files = list(iter_audio_files(AUDIO_FOLDER))
+    print("\nCleanup complete.")
+    print(f"  - Deleted: {deleted}")
+    if failed:
+        print(f"  - Failed: {failed}")
+    print(
+        f"  - Remaining audio files: {len(remaining_audio_files)} "
+        f"({summarize_extensions(remaining_audio_files)})"
+    )
+    print(f"  - Audio-backed metadata rows: {len(catalog_basenames)}")
+
+    return {
+        "deleted": deleted,
+        "failed": failed,
+        "orphaned": len(orphaned_files),
+        "catalog_audio_rows": len(catalog_basenames),
+        "audio_files": len(remaining_audio_files),
+    }
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Remove local audio files that are not represented by unified metadata."
+    )
+    parser.add_argument("--auto-confirm", "-y", action="store_true")
+    parser.add_argument("--dry-run", action="store_true")
+    args = parser.parse_args()
+
+    cleanup_orphaned_files(auto_confirm=args.auto_confirm, dry_run=args.dry_run)
+
 
 if __name__ == "__main__":
-    print("Orphaned MP3 File Cleanup Tool")
-    print("=" * 60)
-    
-    # Check for --auto-confirm flag
-    auto_confirm = '--auto-confirm' in sys.argv or '-y' in sys.argv
-    
-    cleanup_orphaned_files(auto_confirm=auto_confirm)
+    main()

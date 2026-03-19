@@ -11,6 +11,8 @@ from sklearn.preprocessing import MultiLabelBinarizer
 from typing import Dict, List, Tuple
 import sys
 
+from src.utils.song_metadata import load_unified_songs
+
 # Ensure we are running from project root
 project_root = Path(__file__).resolve().parent.parent.parent
 os.chdir(project_root)
@@ -36,7 +38,7 @@ def load_genre_mapping(csv_path: str = None) -> Dict[str, List[str]]:
     # Use unified CSV by default
     if csv_path is None:
         csv_path = UNIFIED_CSV
-    
+
     # Also check legacy path for backward compatibility
     if not os.path.exists(csv_path):
         legacy_path = os.path.join("data", "songs_data_with_genre.csv")
@@ -46,19 +48,38 @@ def load_genre_mapping(csv_path: str = None) -> Dict[str, List[str]]:
         else:
             print(f"Warning: {csv_path} not found. Returning empty mapping.")
             return genre_mapping
-    
+
     try:
-        with open(csv_path, 'r', encoding='utf-8') as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                filename = row.get('filename', '').strip()
-                genre_str = row.get('genre', '').strip()
-                
-                if filename and genre_str:
-                    # Split comma-separated genres and clean whitespace
-                    genres = [g.strip() for g in genre_str.split(',') if g.strip()]
-                    genre_mapping[filename] = genres
-                    
+        if Path(csv_path).name == "songs.csv":
+            unified = load_unified_songs(csv_path)
+            if "has_audio" in unified.columns:
+                unified = unified[unified["has_audio"]].copy()
+            unified = unified.sort_values(
+                by=["has_audio", "audio_basename", "filename"],
+                ascending=[False, True, True],
+                kind="stable",
+            )
+            for _, row in unified.iterrows():
+                genre_str = str(row.get("genre", "")).strip()
+                if not genre_str:
+                    continue
+                key = str(row.get("filename", "")).strip() or str(row.get("audio_basename", "")).strip()
+                if not key or key in genre_mapping:
+                    continue
+                genres = [g.strip() for g in genre_str.split(",") if g.strip()]
+                if genres:
+                    genre_mapping[key] = genres
+        else:
+            with open(csv_path, 'r', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    filename = row.get('filename', '').strip()
+                    genre_str = row.get('genre', '').strip()
+
+                    if filename and genre_str:
+                        genres = [g.strip() for g in genre_str.split(',') if g.strip()]
+                        genre_mapping[filename] = genres
+
         print(f"Loaded genre mapping for {len(genre_mapping)} songs from {csv_path}")
         
         # Print genre statistics

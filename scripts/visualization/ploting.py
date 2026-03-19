@@ -33,12 +33,8 @@ def plot_feature(feature, y, sr, hop_length,
         plt.title(f'{feature_type.upper()} for "{song_name}"')
     
     elif feature_type == 'melspectrogram':
-        # Feature is usually in dB if extracted as such, or power. 
-        # extract_features.py saves it as power if it follows librosa.feature.melspectrogram
-        # But wait, extract_features.py doesn't actually extract melspectrogram by default?
-        # Let's check extract_features.py again. It extracts: 
-        # mfcc, delta, delta2, centroid, rolloff, flux, flatness, zcr, chroma, beat
-        # Ah, ploting.py HAD melspectrogram. 
+        # Legacy-only path: the active handcrafted extractor does not emit
+        # mel-spectrogram arrays by default, but older runs may still have them.
         librosa.display.specshow(librosa.power_to_db(feature, ref=np.max), 
                                  x_axis='time', y_axis='mel',
                                  sr=sr, hop_length=hop_length, cmap='viridis')
@@ -169,15 +165,16 @@ def run_plotting(audio_dir='audio_files', features_dir='output/features', plots_
     for wav_path in tqdm(audio_files, desc="Plotting songs"):
         base_filename = os.path.splitext(os.path.basename(wav_path))[0]
         
-        # Features extracted by extract_features.py
+        # Active handcrafted features extracted by extract_features.py.
         feature_types = [
             'mfcc', 'delta_mfcc', 'delta2_mfcc', 
             'spectral_centroid', 'spectral_rolloff', 'spectral_flux', 'spectral_flatness', 
             'zero_crossing_rate', 'chroma', 'beat_strength'
         ]
-        
-        # Add legacy features if present
-        feature_types.append('melspectrogram')
+
+        # Only add the legacy mel-spectrogram path if that exact file exists.
+        if (features_dir_path / f"{base_filename}_melspectrogram.npy").is_file():
+            feature_types.append('melspectrogram')
 
         try:
             y, sr = librosa.load(wav_path, sr=None)

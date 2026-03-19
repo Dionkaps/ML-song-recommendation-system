@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 from pathlib import Path
@@ -25,7 +26,9 @@ from src.ui.modern_ui import launch_ui  # noqa: E402
 from src.clustering.kmeans import (  # noqa: E402
     compute_cluster_range,
     compute_visualization_coords,
-    load_clustering_dataset,
+    load_clustering_dataset_bundle,
+    save_retrieval_artifact,
+    snapshot_dataset_qc_artifacts,
 )
 
 
@@ -473,6 +476,8 @@ def train_vade(model: VaDE, loader: DataLoader, cfg: TrainConfig):
 def run_vade_clustering(
     audio_dir: str = "audio_files",
     results_dir: str = "output/features",
+    output_dir: str = "output/clustering_results",
+    metrics_dir: str = "output/metrics",
     n_components: int = 5,
     dynamic_component_selection: bool = True,
     dynamic_min_components: Optional[int] = None,
@@ -491,6 +496,10 @@ def run_vade_clustering(
     include_genre: bool = fv.include_genre,
     include_msd: bool = fv.include_msd_features,
     songs_csv_path: Optional[str] = None,
+    selected_audio_feature_keys: Optional[List[str]] = None,
+    equalization_method: Optional[str] = None,
+    pca_components: Optional[int] = None,
+    profile_id: Optional[str] = None,
 ):
     """
     Run VaDE (Variational Deep Embedding) clustering on audio features.
@@ -530,7 +539,7 @@ def run_vade_clustering(
     # -------------------------
     # Assemble feature matrix X
     # -------------------------
-    file_names, genres, unique_genres, X_prepared = load_clustering_dataset(
+    dataset_bundle = load_clustering_dataset_bundle(
         audio_dir=audio_dir,
         results_dir=results_dir,
         n_mfcc=n_mfcc,
@@ -538,7 +547,15 @@ def run_vade_clustering(
         include_genre=include_genre,
         include_msd=include_msd,
         songs_csv_path=songs_csv_path,
+        selected_audio_feature_keys=selected_audio_feature_keys,
+        equalization_method=equalization_method,
+        pca_components=pca_components,
     )
+    file_names = dataset_bundle["file_names"]
+    genres = dataset_bundle["genres"]
+    unique_genres = dataset_bundle["unique_genres"]
+    X_prepared = dataset_bundle["prepared_features"]
+    metadata_frame = dataset_bundle["metadata_frame"]
 
     # -------------------------
     # Compute data-driven component range
@@ -676,6 +693,11 @@ def run_vade_clustering(
     df = pd.DataFrame(
         {
             "Song": file_names,
+            "Artist": metadata_frame["Artist"].astype(str).to_numpy(),
+            "Title": metadata_frame["Title"].astype(str).to_numpy(),
+            "Filename": metadata_frame["Filename"].astype(str).to_numpy(),
+            "MSDTrackID": metadata_frame["MSDTrackID"].astype(str).to_numpy(),
+            "GenreList": metadata_frame["GenreList"].astype(str).to_numpy(),
             "Genre": genres,
             "Cluster": labels,
             "Confidence": confidence,
@@ -689,10 +711,10 @@ def run_vade_clustering(
         }
     )
 
-    output_dir = Path("output/clustering_results")
-    metrics_dir = Path("output/metrics")
-    output_dir.mkdir(parents=True, exist_ok=True)
-    metrics_dir.mkdir(parents=True, exist_ok=True)
+    output_dir_path = Path(output_dir)
+    metrics_dir_path = Path(metrics_dir)
+    output_dir_path.mkdir(parents=True, exist_ok=True)
+    metrics_dir_path.mkdir(parents=True, exist_ok=True)
     
     # Save BIC scores if available
     if bic_scores is not None and silhouette_scores is not None:
@@ -701,13 +723,106 @@ def run_vade_clustering(
             "BIC": bic_scores,
             "LatentSilhouette": silhouette_scores,
         })
-        selection_path = metrics_dir / "vade_selection_criteria.csv"
+        selection_path = metrics_dir_path / "vade_selection_criteria.csv"
         selection_df.to_csv(selection_path, index=False)
         print(f"Stored VaDE selection diagnostics -> {selection_path}")
+    else:
+        selection_path = None
     
-    csv_path = output_dir / "audio_clustering_results_vade.csv"
+    csv_path = output_dir_path / "audio_clustering_results_vade.csv"
     df.to_csv(csv_path, index=False)
     print(f"Results written to -> {csv_path}")
+
+    artifact_path = save_retrieval_artifact(
+        method_id="vade",
+        file_names=file_names,
+        prepared_features=X_prepared,
+        labels=labels,
+        coords=coords,
+        output_dir=str(output_dir_path),
+        artists=metadata_frame["Artist"].astype(str).to_numpy(),
+        titles=metadata_frame["Title"].astype(str).to_numpy(),
+        filenames=metadata_frame["Filename"].astype(str).to_numpy(),
+        msd_track_ids=metadata_frame["MSDTrackID"].astype(str).to_numpy(),
+        assignment_confidence=confidence,
+        posterior_probabilities=GAMMA,
+        feature_subset_name=dataset_bundle["qc_summary"].get("feature_subset_name"),
+        selected_audio_feature_keys=dataset_bundle["qc_summary"].get(
+            "selected_audio_feature_keys"
+        ),
+        feature_equalization_method=dataset_bundle["qc_summary"].get(
+            "equalization_method"
+        ),
+        pca_components_per_group=dataset_bundle["qc_summary"].get(
+            "pca_components_per_group"
+        ),
+        raw_feature_dimension=dataset_bundle["qc_summary"].get("raw_feature_dimension"),
+        prepared_feature_dimension=dataset_bundle["qc_summary"].get(
+            "prepared_feature_dimension"
+        ),
+        profile_id=profile_id,
+    )
+
+    method_summary = {
+        "method_id": "vade",
+        "profile_id": profile_id or "unspecified",
+        "representation": {
+            "feature_subset_name": dataset_bundle["qc_summary"].get("feature_subset_name"),
+            "selected_audio_feature_keys": dataset_bundle["qc_summary"].get(
+                "selected_audio_feature_keys"
+            ),
+            "equalization_method": dataset_bundle["qc_summary"].get(
+                "equalization_method"
+            ),
+            "pca_components_per_group": dataset_bundle["qc_summary"].get(
+                "pca_components_per_group"
+            ),
+            "raw_feature_dimension": dataset_bundle["qc_summary"].get(
+                "raw_feature_dimension"
+            ),
+            "prepared_feature_dimension": dataset_bundle["qc_summary"].get(
+                "prepared_feature_dimension"
+            ),
+            "include_genre": bool(include_genre),
+            "include_msd_requested": bool(include_msd),
+            "include_msd_effective": dataset_bundle["qc_summary"].get(
+                "include_msd_effective"
+            ),
+        },
+        "hyperparameters": {
+            "dynamic_component_selection": bool(dynamic_component_selection),
+            "requested_n_components": int(n_components),
+            "selected_n_components": int(selected_components),
+            "latent_dim": int(latent_dim),
+            "batch_size": int(batch_size),
+            "learning_rate": float(lr),
+            "pretrain_epochs": int(pretrain_epochs),
+            "train_epochs": int(train_epochs),
+            "kl_warmup_epochs": int(kl_warmup_epochs),
+            "kl_c_weight": float(kl_c_weight),
+            "device": cfg.device,
+        },
+        "outputs": {
+            "results_csv": str(csv_path),
+            "retrieval_artifact": str(artifact_path),
+            "selection_criteria_csv": (
+                str(selection_path) if selection_path is not None else None
+            ),
+            "dataset_qc_summary_json": dataset_bundle["qc_json_path"],
+            "dataset_qc_csv": dataset_bundle["qc_csv_path"],
+        },
+    }
+    run_qc_csv_path, run_qc_json_path = snapshot_dataset_qc_artifacts(
+        dataset_bundle["qc_csv_path"],
+        dataset_bundle["qc_json_path"],
+        str(metrics_dir_path),
+    )
+    method_summary["outputs"]["dataset_qc_summary_json"] = run_qc_json_path
+    method_summary["outputs"]["dataset_qc_csv"] = run_qc_csv_path
+    summary_path = metrics_dir_path / "vade_run_summary.json"
+    with summary_path.open("w", encoding="utf-8") as handle:
+        json.dump(method_summary, handle, indent=2)
+    print(f"Stored VaDE run summary -> {summary_path}")
 
     return df, coords, labels
 
@@ -729,4 +844,11 @@ if __name__ == "__main__":
         include_genre=fv.include_genre,
     )
 
-    launch_ui(DF, COORDS, LABELS, audio_dir="audio_files", clustering_method="VaDE")
+    launch_ui(
+        DF,
+        COORDS,
+        LABELS,
+        audio_dir="audio_files",
+        clustering_method="VaDE",
+        retrieval_method_id="vade",
+    )
