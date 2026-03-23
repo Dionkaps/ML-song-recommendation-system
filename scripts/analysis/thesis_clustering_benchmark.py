@@ -48,6 +48,7 @@ from scripts.analysis.strategic_clustering_search import (  # noqa: E402
     build_correlation_summary,
     build_hdbscan_search_space,
     build_variance_summary,
+    compute_hdbscan_dbcv_safely,
     compute_metrics,
     ensure_dir,
     gmm_stability,
@@ -57,6 +58,8 @@ from scripts.analysis.strategic_clustering_search import (  # noqa: E402
     load_or_build_raw_cache,
     prepare_feature_matrix,
 )
+from src.ui.ui_snapshot import publish_benchmark_dashboard_snapshot  # noqa: E402
+from src.utils.genre_taxonomy import resolve_pipeline_songs_csv  # noqa: E402
 from src.utils.song_metadata import build_audio_metadata_frame  # noqa: E402
 
 DEFAULT_MATCHED_TARGETS: Tuple[int, ...] = (4, 8, 12, 16, 20)
@@ -163,6 +166,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--max-k", type=int, default=20)
     parser.add_argument("--max-components", type=int, default=20)
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print the final benchmark summary as JSON instead of a human-readable message.",
+    )
     return parser.parse_args()
 
 
@@ -337,47 +345,99 @@ def evaluate_hdbscan_grid(
     data64 = np.asarray(X, dtype=np.float64)
     rows = []
     for min_cluster_size, min_samples in build_hdbscan_search_space(len(X)):
-        start = perf_counter()
-        model = hdbscan.HDBSCAN(
-            min_cluster_size=min_cluster_size,
-            min_samples=min_samples,
-            prediction_data=True,
-        )
-        labels = model.fit_predict(X)
-        fit_time_sec = perf_counter() - start
-        noise_fraction = float(np.mean(labels == -1))
-        coverage = 1.0 - noise_fraction
-        mask = labels != -1
-        n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
-        singleton_fraction, largest_cluster_fraction = cluster_size_diagnostics(labels)
-
         row = {
             "method": "hdbscan",
             "param_1_name": "min_cluster_size",
             "param_1_value": int(min_cluster_size),
             "param_2_name": "min_samples",
             "param_2_value": int(min_samples),
-            "fit_time_sec": fit_time_sec,
-            "coverage": coverage,
-            "noise_fraction": noise_fraction,
             "bic": float("nan"),
             "aic": float("nan"),
             "avg_confidence": float("nan"),
-            "singleton_fraction": singleton_fraction,
-            "largest_cluster_fraction": largest_cluster_fraction,
-            "n_clusters": float(n_clusters),
         }
-
-        if n_clusters >= 2 and mask.sum() > n_clusters:
-            metrics = compute_metrics(data64[mask], labels[mask], y_true[mask])
-            row.update(metrics)
-            try:
-                row["dbcv"] = float(validity_index(data64, labels))
-            except Exception:
-                row["dbcv"] = float("nan")
-        else:
+        if min_cluster_size > len(X) or min_samples > len(X):
             row.update(
                 {
+                    "fit_time_sec": float("nan"),
+                    "coverage": float("nan"),
+                    "noise_fraction": float("nan"),
+                    "singleton_fraction": float("nan"),
+                    "largest_cluster_fraction": float("nan"),
+                    "n_clusters": float("nan"),
+                    "cluster_balance": float("nan"),
+                    "silhouette": float("nan"),
+                    "calinski_harabasz": float("nan"),
+                    "davies_bouldin": float("nan"),
+                    "ari": float("nan"),
+                    "ami": float("nan"),
+                    "nmi": float("nan"),
+                    "homogeneity": float("nan"),
+                    "completeness": float("nan"),
+                    "v_measure": float("nan"),
+                    "dbcv": float("nan"),
+                }
+            )
+            rows.append(row)
+            continue
+
+        try:
+            start = perf_counter()
+            model = hdbscan.HDBSCAN(
+                min_cluster_size=min_cluster_size,
+                min_samples=min_samples,
+                prediction_data=True,
+            )
+            labels = model.fit_predict(X)
+            fit_time_sec = perf_counter() - start
+            noise_fraction = float(np.mean(labels == -1))
+            coverage = 1.0 - noise_fraction
+            mask = labels != -1
+            n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
+            singleton_fraction, largest_cluster_fraction = cluster_size_diagnostics(labels)
+            row.update(
+                {
+                    "fit_time_sec": fit_time_sec,
+                    "coverage": coverage,
+                    "noise_fraction": noise_fraction,
+                    "singleton_fraction": singleton_fraction,
+                    "largest_cluster_fraction": largest_cluster_fraction,
+                    "n_clusters": float(n_clusters),
+                }
+            )
+
+            if n_clusters >= 2 and mask.sum() > n_clusters:
+                metrics = compute_metrics(data64[mask], labels[mask], y_true[mask])
+                row.update(metrics)
+                row["dbcv"] = compute_hdbscan_dbcv_safely(
+                    validity_index=validity_index,
+                    data64=data64,
+                    labels=labels,
+                )
+            else:
+                row.update(
+                    {
+                        "cluster_balance": float("nan"),
+                        "silhouette": float("nan"),
+                        "calinski_harabasz": float("nan"),
+                        "davies_bouldin": float("nan"),
+                        "ari": float("nan"),
+                        "ami": float("nan"),
+                        "nmi": float("nan"),
+                        "homogeneity": float("nan"),
+                        "completeness": float("nan"),
+                        "v_measure": float("nan"),
+                        "dbcv": float("nan"),
+                    }
+                )
+        except Exception:
+            row.update(
+                {
+                    "fit_time_sec": float("nan"),
+                    "coverage": float("nan"),
+                    "noise_fraction": float("nan"),
+                    "singleton_fraction": float("nan"),
+                    "largest_cluster_fraction": float("nan"),
+                    "n_clusters": float("nan"),
                     "cluster_balance": float("nan"),
                     "silhouette": float("nan"),
                     "calinski_harabasz": float("nan"),
@@ -717,6 +777,8 @@ def build_benchmark_report(
             "",
             "## Notes",
             "",
+            "- Genre references in this benchmark come from the taxonomy-aware merged-genre CSV, not the raw source labels.",
+            "- Tracks without any non-`non_genre_*` mapped primary genre are excluded before clustering and benchmarking.",
             "- This benchmark does not use any pilot shortlist or subset-stage promotion logic.",
             "- Every prespecified representation was evaluated directly on the full dataset.",
             "- Native operating-point selection uses internal-only method-specific criteria.",
@@ -733,6 +795,7 @@ def main() -> None:
     args = parse_args()
     output_dir = get_output_dir(args.output_dir or None)
     cache_output = output_dir / "raw_audio_feature_cache.npz"
+    resolved_songs_csv = resolve_pipeline_songs_csv(args.songs_csv)
 
     X_raw, file_names, genres = load_or_build_raw_cache(
         audio_dir=Path(args.audio_dir),
@@ -743,7 +806,7 @@ def main() -> None:
     if not cache_output.exists():
         np.savez_compressed(cache_output, X=X_raw, file_names=file_names, genres=genres)
 
-    metadata = build_aligned_metadata(file_names, songs_csv_path=args.songs_csv)
+    metadata = build_aligned_metadata(file_names, songs_csv_path=str(resolved_songs_csv))
     label_encoder = LabelEncoder()
     y_true = label_encoder.fit_transform(genres)
 
@@ -775,7 +838,7 @@ def main() -> None:
         "matched_targets": [int(value) for value in args.matched_targets],
         "matched_band_fraction": float(args.matched_band_fraction),
         "raw_cache": str(cache_output),
-        "songs_csv": str(args.songs_csv),
+        "songs_csv": str(resolved_songs_csv),
     }
 
     variance_df.to_csv(output_dir / "feature_group_variance_summary.csv", index=False)
@@ -800,9 +863,15 @@ def main() -> None:
         global_native_df=global_native_df,
         global_matched_df=global_matched_df,
     )
+    publish_benchmark_dashboard_snapshot(output_dir)
 
+    summary = {"output_dir": str(output_dir), "report_path": str(report_path)}
     print("\nThesis benchmark complete.")
-    print(json.dumps({"output_dir": str(output_dir), "report_path": str(report_path)}, indent=2))
+    if args.json:
+        print(json.dumps(summary, indent=2))
+    else:
+        print(f"Output directory: {output_dir}")
+        print(f"Benchmark report: {report_path}")
 
 
 if __name__ == "__main__":

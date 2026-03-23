@@ -1,3 +1,4 @@
+import argparse
 import glob
 import json
 import os
@@ -26,8 +27,8 @@ from src.features.feature_qc import (
     collect_feature_bundle_inventory,
     load_validated_feature_bundle,
 )
-from src.ui.modern_ui import launch_ui
 from src.utils import genre_mapper
+from src.utils.genre_taxonomy import resolve_pipeline_songs_csv
 from src.utils.song_metadata import build_audio_metadata_frame
 
 
@@ -527,11 +528,15 @@ def _load_genre_mapping(
     genre_list_path = os.path.join(results_dir, "genre_list.npy")
     audio_basenames = _load_audio_basenames(audio_dir)
 
-    # Try loading from unified songs.csv first, then fallback to legacy
-    csv_path = os.path.join("data", "songs.csv")
+    # Try loading from the taxonomy-aware songs CSV first, then fallback to legacy
+    csv_path = str(resolve_pipeline_songs_csv(os.path.join("data", "songs.csv")))
     legacy_csv_path = os.path.join("data", "songs_data_with_genre.csv")
     
-    active_csv = csv_path if os.path.exists(csv_path) else (legacy_csv_path if os.path.exists(legacy_csv_path) else None)
+    active_csv = (
+        csv_path
+        if os.path.exists(csv_path)
+        else (legacy_csv_path if os.path.exists(legacy_csv_path) else None)
+    )
     
     if active_csv:
         print(f"Loading genre mapping from {active_csv}...")
@@ -1036,12 +1041,17 @@ def _load_msd_feature_map(
 ) -> Tuple[Dict[str, Dict[str, float]], bool]:
     """Load normalized MSD feature source data if the unified CSV is available."""
 
-    if not songs_csv_path or not os.path.exists(songs_csv_path):
+    resolved_songs_csv = (
+        str(resolve_pipeline_songs_csv(songs_csv_path))
+        if songs_csv_path
+        else None
+    )
+    if not resolved_songs_csv or not os.path.exists(resolved_songs_csv):
         return {}, False
 
     msd_features_map: Dict[str, Dict[str, float]] = {}
     try:
-        songs_df = pd.read_csv(songs_csv_path)
+        songs_df = pd.read_csv(resolved_songs_csv)
         for _, row in songs_df.iterrows():
             if pd.notna(row.get("filename")) and pd.notna(row.get("key")):
                 base_name = str(row["filename"]).replace(".mp3", "")
@@ -1052,11 +1062,11 @@ def _load_msd_feature_map(
                     "tempo": float(row["tempo"]) if pd.notna(row["tempo"]) else 120.0,
                 }
     except Exception as exc:
-        print(f"Warning: Could not load MSD features from {songs_csv_path}: {exc}")
+        print(f"Warning: Could not load MSD features from {resolved_songs_csv}: {exc}")
         return {}, False
 
     covered = sum(1 for base in base_names if base in msd_features_map)
-    print(f"Loaded MSD features for {covered} songs from {songs_csv_path}")
+    print(f"Loaded MSD features for {covered} songs from {resolved_songs_csv}")
     return msd_features_map, True
 
 
@@ -1123,6 +1133,34 @@ def _collect_feature_vectors(
         stale_feature_bases = []
 
     qc_rows: List[Dict[str, Any]] = []
+    if genre_map:
+        eligible_bases = set(genre_map)
+        excluded_bases = sorted(set(candidate_bases) - eligible_bases)
+        if excluded_bases:
+            for base in excluded_bases:
+                qc_rows.append(
+                    {
+                        "BaseName": base,
+                        "Status": "excluded_by_taxonomy",
+                        "MissingKeys": "",
+                        "InvalidKeys": "",
+                        "PresentKeys": ",".join(bundle_inventory.get(base, [])),
+                        "IssueDetails": json.dumps(
+                            {
+                                "excluded_by_taxonomy": (
+                                    "missing taxonomy-backed primary genre"
+                                )
+                            },
+                            sort_keys=True,
+                        ),
+                    }
+                )
+            print(
+                f"Excluded {len(excluded_bases)} audio tracks without a taxonomy-backed "
+                "primary genre."
+            )
+        candidate_bases = [base for base in candidate_bases if base in eligible_bases]
+
     for base in stale_feature_bases:
         qc_rows.append(
             {
@@ -1260,6 +1298,7 @@ def _collect_feature_vectors(
 
     qc_summary = {
         "candidate_audio_tracks": int(len(candidate_bases)),
+        "excluded_by_taxonomy_tracks": int(len(excluded_bases) if genre_map else 0),
         "loaded_tracks": int(len(file_names)),
         "dropped_incomplete_tracks": int(dropped_incomplete),
         "dropped_invalid_tracks": int(dropped_invalid),
@@ -1349,6 +1388,8 @@ def load_clustering_dataset_bundle(
 
     if songs_csv_path is None and include_msd:
         songs_csv_path = "data/songs.csv"
+    if songs_csv_path:
+        songs_csv_path = str(resolve_pipeline_songs_csv(songs_csv_path))
 
     selected_audio_feature_keys = _resolve_selected_audio_feature_keys(
         selected_audio_feature_keys
@@ -1438,9 +1479,10 @@ def load_clustering_dataset_bundle(
         }
     )
     qc_csv_path, qc_json_path = _write_dataset_qc_report(results_dir, qc_rows, qc_summary)
+    metadata_csv_path = songs_csv_path or str(resolve_pipeline_songs_csv("data/songs.csv"))
     metadata_frame = build_audio_metadata_frame(
         file_names,
-        songs_csv_path=songs_csv_path or "data/songs.csv",
+        songs_csv_path=metadata_csv_path,
     )
 
     print(
@@ -1866,6 +1908,11 @@ def run_kmeans_clustering(
             "Filename": metadata_frame["Filename"].astype(str).to_numpy(),
             "MSDTrackID": metadata_frame["MSDTrackID"].astype(str).to_numpy(),
             "GenreList": metadata_frame["GenreList"].astype(str).to_numpy(),
+            "PrimaryGenres": metadata_frame["PrimaryGenres"].astype(str).to_numpy(),
+            "SecondaryTags": metadata_frame["SecondaryTags"].astype(str).to_numpy(),
+            "AllGenreTags": metadata_frame["AllGenreTags"].astype(str).to_numpy(),
+            "OriginalGenreList": metadata_frame["OriginalGenreList"].astype(str).to_numpy(),
+            "OriginalPrimaryGenre": metadata_frame["OriginalPrimaryGenre"].astype(str).to_numpy(),
             "Genre": genres,
             "Cluster": labels,
             "Distance": distances,
@@ -1987,7 +2034,20 @@ def run_kmeans_clustering(
     return df, coords, labels
 
 
+def _parse_cli_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Run K-Means clustering and optionally launch the interactive UI."
+    )
+    parser.add_argument(
+        "--ui",
+        action="store_true",
+        help="Launch the interactive clustering UI after clustering finishes.",
+    )
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
+    args = _parse_cli_args()
     DF, COORDS, LABELS = run_kmeans_clustering(
         audio_dir="audio_files",
         results_dir="output/features",
@@ -1996,11 +2056,19 @@ if __name__ == "__main__":
         include_genre=fv.include_genre,
     )
 
-    launch_ui(
-        DF,
-        COORDS,
-        LABELS,
-        audio_dir="audio_files",
-        clustering_method="K-means",
-        retrieval_method_id="kmeans",
-    )
+    if args.ui:
+        from src.ui.modern_ui import launch_ui
+
+        launch_ui(
+            DF,
+            COORDS,
+            LABELS,
+            audio_dir="audio_files",
+            clustering_method="K-means",
+            retrieval_method_id="kmeans",
+        )
+    else:
+        print(
+            "Skipping interactive clustering UI. Run 'python src/ui/modern_ui.py' "
+            "to open the latest benchmark-linked UI snapshot."
+        )

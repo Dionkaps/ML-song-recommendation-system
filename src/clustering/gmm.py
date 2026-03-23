@@ -1,3 +1,4 @@
+import argparse
 import json
 import os
 import sys
@@ -25,9 +26,6 @@ from src.clustering.kmeans import (  # noqa: E402
     save_retrieval_artifact,
     snapshot_dataset_qc_artifacts,
 )
-from src.ui.modern_ui import launch_ui  # noqa: E402
-
-
 DEFAULT_COVARIANCE_TYPES: Tuple[str, ...] = ("diag", "full")
 DEFAULT_REG_COVAR_GRID: Tuple[float, ...] = (1e-6, 1e-5, 1e-4, 1e-3)
 DEFAULT_STABILITY_SEEDS: Tuple[int, ...] = (42, 43, 44)
@@ -865,6 +863,11 @@ def run_gmm_clustering(
             "Filename": metadata_frame["Filename"].astype(str).to_numpy(),
             "MSDTrackID": metadata_frame["MSDTrackID"].astype(str).to_numpy(),
             "GenreList": metadata_frame["GenreList"].astype(str).to_numpy(),
+            "PrimaryGenres": metadata_frame["PrimaryGenres"].astype(str).to_numpy(),
+            "SecondaryTags": metadata_frame["SecondaryTags"].astype(str).to_numpy(),
+            "AllGenreTags": metadata_frame["AllGenreTags"].astype(str).to_numpy(),
+            "OriginalGenreList": metadata_frame["OriginalGenreList"].astype(str).to_numpy(),
+            "OriginalPrimaryGenre": metadata_frame["OriginalPrimaryGenre"].astype(str).to_numpy(),
             "Genre": genres,
             "Cluster": labels,
             "Confidence": probabilities,
@@ -1014,7 +1017,30 @@ def run_gmm_clustering(
     return df, coords, labels
 
 
+def _parse_cli_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Run GMM clustering and optionally launch the interactive clustering UI."
+        )
+    )
+    parser.add_argument(
+        "--ui",
+        action="store_true",
+        help="Launch the interactive clustering UI after clustering finishes.",
+    )
+    parser.add_argument(
+        "--no-ui",
+        action="store_true",
+        help=(
+            "Deprecated compatibility flag. The UI is skipped by default unless "
+            "--ui is provided."
+        ),
+    )
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
+    args = _parse_cli_args()
     DF, COORDS, LABELS = run_gmm_clustering(
         audio_dir="audio_files",
         results_dir="output/features",
@@ -1023,11 +1049,22 @@ if __name__ == "__main__":
         include_genre=fv.include_genre,
     )
 
-    launch_ui(
-        DF,
-        COORDS,
-        LABELS,
-        audio_dir="audio_files",
-        clustering_method="GMM",
-        retrieval_method_id="gmm",
-    )
+    if args.ui and args.no_ui:
+        raise SystemExit("Use either --ui or --no-ui, not both.")
+
+    if args.ui:
+        from src.ui.modern_ui import launch_ui  # noqa: E402
+
+        launch_ui(
+            DF,
+            COORDS,
+            LABELS,
+            audio_dir="audio_files",
+            clustering_method="GMM",
+            retrieval_method_id="gmm",
+        )
+    else:
+        print(
+            "Skipping interactive clustering UI. Run 'python src/ui/modern_ui.py' "
+            "to open the latest benchmark-linked UI snapshot."
+        )

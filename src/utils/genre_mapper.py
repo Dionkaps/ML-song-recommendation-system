@@ -11,7 +11,14 @@ from sklearn.preprocessing import MultiLabelBinarizer
 from typing import Dict, List, Tuple
 import sys
 
-from src.utils.song_metadata import load_unified_songs
+from src.utils.genre_taxonomy import (
+    PRIMARY_TAGS_COLUMN,
+    SECONDARY_TAGS_COLUMN,
+    coerce_bool,
+    load_taxonomy_songs,
+    resolve_pipeline_songs_csv,
+    split_tag_list,
+)
 
 # Ensure we are running from project root
 project_root = Path(__file__).resolve().parent.parent.parent
@@ -24,63 +31,58 @@ UNIFIED_CSV = os.path.join("data", "songs.csv")
 
 def load_genre_mapping(csv_path: str = None) -> Dict[str, List[str]]:
     """
-    Load genre mapping from unified songs.csv.
+    Load taxonomy-aware genre mapping from the active songs CSV.
     
     Args:
-        csv_path: Path to songs.csv (or legacy songs_data_with_genre.csv)
+        csv_path: Path to a songs CSV. When pointed at the canonical
+            ``data/songs.csv`` source, the merged-genre assignment CSV is
+            auto-generated and used instead.
         
     Returns:
         Dictionary mapping filename to list of genres
-        Example: {'Artist - Title.mp3': ['hip hop', 'underground rap', 'g funk']}
+        Example: {'Artist - Title.mp3': ['rock', 'alternative_indie_rock', 'non_genre_region_scene']}
     """
     genre_mapping = {}
-    
-    # Use unified CSV by default
-    if csv_path is None:
-        csv_path = UNIFIED_CSV
-
-    # Also check legacy path for backward compatibility
-    if not os.path.exists(csv_path):
-        legacy_path = os.path.join("data", "songs_data_with_genre.csv")
-        if os.path.exists(legacy_path):
-            print(f"Note: Using legacy CSV at {legacy_path}")
-            csv_path = legacy_path
-        else:
-            print(f"Warning: {csv_path} not found. Returning empty mapping.")
-            return genre_mapping
 
     try:
-        if Path(csv_path).name == "songs.csv":
-            unified = load_unified_songs(csv_path)
-            if "has_audio" in unified.columns:
-                unified = unified[unified["has_audio"]].copy()
-            unified = unified.sort_values(
-                by=["has_audio", "audio_basename", "filename"],
-                ascending=[False, True, True],
-                kind="stable",
+        resolved_csv_path = resolve_pipeline_songs_csv(csv_path or UNIFIED_CSV)
+
+        if resolved_csv_path.name == "songs_with_merged_genres.csv" or resolved_csv_path.name == "songs.csv":
+            unified = load_taxonomy_songs(
+                csv_path=str(resolved_csv_path),
+                audio_only=True,
+                eligible_only=True,
             )
             for _, row in unified.iterrows():
                 genre_str = str(row.get("genre", "")).strip()
                 if not genre_str:
                     continue
-                key = str(row.get("filename", "")).strip() or str(row.get("audio_basename", "")).strip()
+                key = str(row.get("filename", "")).strip() or str(
+                    row.get("audio_basename", "")
+                ).strip()
                 if not key or key in genre_mapping:
                     continue
-                genres = [g.strip() for g in genre_str.split(",") if g.strip()]
+                genres = split_tag_list(genre_str, delimiter=",")
                 if genres:
                     genre_mapping[key] = genres
         else:
-            with open(csv_path, 'r', encoding='utf-8') as f:
+            with open(resolved_csv_path, 'r', encoding='utf-8') as f:
                 reader = csv.DictReader(f)
                 for row in reader:
                     filename = row.get('filename', '').strip()
                     genre_str = row.get('genre', '').strip()
+                    include_in_mrs_raw = row.get("include_in_mrs", "")
 
-                    if filename and genre_str:
-                        genres = [g.strip() for g in genre_str.split(',') if g.strip()]
+                    if filename and genre_str and (
+                        include_in_mrs_raw == "" or coerce_bool(include_in_mrs_raw)
+                    ):
+                        genres = split_tag_list(genre_str, delimiter=",")
                         genre_mapping[filename] = genres
 
-        print(f"Loaded genre mapping for {len(genre_mapping)} songs from {csv_path}")
+        print(
+            f"Loaded genre mapping for {len(genre_mapping)} songs from "
+            f"{resolved_csv_path}"
+        )
         
         # Print genre statistics
         all_genres = set()
@@ -133,6 +135,43 @@ def get_primary_genre(filename: str, genre_mapping: Dict[str, List[str]]) -> str
     """
     genres = genre_mapping.get(filename, [])
     return genres[0] if genres else 'unknown'
+
+
+def load_secondary_tag_mapping(csv_path: str = None) -> Dict[str, List[str]]:
+    """Load secondary ``non_genre_*`` tags for eligible audio-backed songs."""
+
+    secondary_mapping: Dict[str, List[str]] = {}
+    resolved_csv_path = resolve_pipeline_songs_csv(csv_path or UNIFIED_CSV)
+    unified = load_taxonomy_songs(
+        csv_path=str(resolved_csv_path),
+        audio_only=True,
+        eligible_only=True,
+    )
+    for _, row in unified.iterrows():
+        key = str(row.get("filename", "")).strip() or str(row.get("audio_basename", "")).strip()
+        if not key or key in secondary_mapping:
+            continue
+        secondary_mapping[key] = split_tag_list(row.get(SECONDARY_TAGS_COLUMN, ""), delimiter=",")
+    return secondary_mapping
+
+
+def load_primary_tag_mapping(csv_path: str = None) -> Dict[str, List[str]]:
+    """Load multi-label primary taxonomy tags for eligible audio-backed songs."""
+
+    primary_mapping: Dict[str, List[str]] = {}
+    resolved_csv_path = resolve_pipeline_songs_csv(csv_path or UNIFIED_CSV)
+    unified = load_taxonomy_songs(
+        csv_path=str(resolved_csv_path),
+        audio_only=True,
+        eligible_only=True,
+    )
+    for _, row in unified.iterrows():
+        key = str(row.get("filename", "")).strip() or str(row.get("audio_basename", "")).strip()
+        if not key or key in primary_mapping:
+            continue
+        tags = split_tag_list(row.get(PRIMARY_TAGS_COLUMN, ""), delimiter=",")
+        primary_mapping[key] = tags
+    return primary_mapping
 
 
 def create_genre_map_for_audio_dir(audio_dir: str, genre_mapping: Dict[str, List[str]]) -> Dict[str, str]:

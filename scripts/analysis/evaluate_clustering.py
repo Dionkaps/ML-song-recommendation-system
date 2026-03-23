@@ -4,6 +4,7 @@ import math
 import re
 import sys
 import unicodedata
+import warnings
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,6 +21,7 @@ from sklearn.metrics import (
     silhouette_score,
 )
 from sklearn.mixture import GaussianMixture
+from sklearn.preprocessing import MultiLabelBinarizer
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent.parent
@@ -70,6 +72,12 @@ class MethodArtifacts:
     frame: pd.DataFrame
     songs: np.ndarray
     genres: np.ndarray
+    primary_tag_texts: np.ndarray
+    secondary_tag_texts: np.ndarray
+    all_tag_texts: np.ndarray
+    primary_tag_matrix: np.ndarray
+    secondary_tag_matrix: np.ndarray
+    all_tag_matrix: np.ndarray
     artists: np.ndarray
     titles: np.ndarray
     filenames: np.ndarray
@@ -221,6 +229,47 @@ def _normalize_metadata_text(text: str) -> str:
     return value
 
 
+def _split_tag_text(text: Any) -> List[str]:
+    value = str(text or "").strip()
+    if not value:
+        return []
+    return [token.strip() for token in value.split(",") if token.strip()]
+
+
+def _build_multivector_matrix(tag_texts: Sequence[Any]) -> Tuple[np.ndarray, List[List[str]]]:
+    tag_lists = [_split_tag_text(text) for text in tag_texts]
+    if any(tag_lists):
+        mlb = MultiLabelBinarizer()
+        matrix = mlb.fit_transform(tag_lists).astype(np.int8)
+    else:
+        matrix = np.zeros((len(tag_lists), 0), dtype=np.int8)
+    return matrix, tag_lists
+
+
+def _tag_overlap_hits(
+    query_vector: np.ndarray,
+    candidate_matrix: np.ndarray,
+) -> np.ndarray:
+    if query_vector.size == 0 or candidate_matrix.size == 0:
+        return np.zeros(candidate_matrix.shape[0], dtype=np.int32)
+    intersections = np.logical_and(candidate_matrix, query_vector).sum(axis=1)
+    return (intersections > 0).astype(np.int32)
+
+
+def _tag_jaccard_scores(
+    query_vector: np.ndarray,
+    candidate_matrix: np.ndarray,
+) -> np.ndarray:
+    if query_vector.size == 0 or candidate_matrix.size == 0:
+        return np.zeros(candidate_matrix.shape[0], dtype=np.float32)
+    intersections = np.logical_and(candidate_matrix, query_vector).sum(axis=1)
+    unions = np.logical_or(candidate_matrix, query_vector).sum(axis=1)
+    scores = np.zeros(candidate_matrix.shape[0], dtype=np.float32)
+    valid = unions > 0
+    scores[valid] = intersections[valid] / unions[valid]
+    return scores
+
+
 def _artifact_scalar_str(
     artifact_payload: Dict[str, np.ndarray],
     key: str,
@@ -287,6 +336,28 @@ def _load_method_artifacts(method_id: str, artifact_dir: Path) -> MethodArtifact
         if "Genre" in frame.columns
         else np.array(["unknown"] * len(songs), dtype=object)
     )
+    primary_tag_texts = (
+        frame["PrimaryGenres"].fillna("").astype(str).to_numpy()
+        if "PrimaryGenres" in frame.columns
+        else genres.copy()
+    )
+    secondary_tag_texts = (
+        frame["SecondaryTags"].fillna("").astype(str).to_numpy()
+        if "SecondaryTags" in frame.columns
+        else np.array([""] * len(songs), dtype=object)
+    )
+    all_tag_texts = (
+        frame["AllGenreTags"].fillna("").astype(str).to_numpy()
+        if "AllGenreTags" in frame.columns
+        else (
+            frame["GenreList"].fillna("").astype(str).to_numpy()
+            if "GenreList" in frame.columns
+            else primary_tag_texts.copy()
+        )
+    )
+    primary_tag_matrix, _ = _build_multivector_matrix(primary_tag_texts)
+    secondary_tag_matrix, _ = _build_multivector_matrix(secondary_tag_texts)
+    all_tag_matrix, _ = _build_multivector_matrix(all_tag_texts)
 
     if "Artist" in frame.columns:
         artists_list = frame["Artist"].fillna("").astype(str).tolist()
@@ -363,6 +434,12 @@ def _load_method_artifacts(method_id: str, artifact_dir: Path) -> MethodArtifact
         frame=frame,
         songs=songs,
         genres=np.asarray(genres, dtype=object),
+        primary_tag_texts=np.asarray(primary_tag_texts, dtype=object),
+        secondary_tag_texts=np.asarray(secondary_tag_texts, dtype=object),
+        all_tag_texts=np.asarray(all_tag_texts, dtype=object),
+        primary_tag_matrix=np.asarray(primary_tag_matrix, dtype=np.int8),
+        secondary_tag_matrix=np.asarray(secondary_tag_matrix, dtype=np.int8),
+        all_tag_matrix=np.asarray(all_tag_matrix, dtype=np.int8),
         artists=np.asarray(artists_list, dtype=object),
         titles=np.asarray(titles_list, dtype=object),
         filenames=np.asarray(filenames, dtype=object),
@@ -592,6 +669,9 @@ def _evaluate_recommendations(
             "QueryFilename": str(artifacts.filenames[query_idx]),
             "QueryMSDTrackID": str(artifacts.msd_track_ids[query_idx]),
             "QueryGenre": str(artifacts.genres[query_idx]),
+            "QueryPrimaryGenres": str(artifacts.primary_tag_texts[query_idx]),
+            "QuerySecondaryTags": str(artifacts.secondary_tag_texts[query_idx]),
+            "QueryAllGenreTags": str(artifacts.all_tag_texts[query_idx]),
             "Cluster": int(artifacts.labels[query_idx]),
             "NoiseRecommendationsDisabled": bool(metadata["noise_disabled"]),
             "InitialClusterSize": int(metadata["initial_cluster_size"]),
@@ -605,17 +685,43 @@ def _evaluate_recommendations(
         for k in ks_sorted:
             top_indices = chosen_indices[:k]
             returned = int(len(top_indices))
-            genre_hits = int(
+            exact_genre_hits = int(
                 np.sum(artifacts.genres[top_indices] == artifacts.genres[query_idx])
             )
             artist_hits = int(
                 np.sum(artifacts.artists[top_indices] == artifacts.artists[query_idx])
             )
+            primary_tag_hits = _tag_overlap_hits(
+                artifacts.primary_tag_matrix[query_idx],
+                artifacts.primary_tag_matrix[top_indices],
+            )
+            all_tag_hits = _tag_overlap_hits(
+                artifacts.all_tag_matrix[query_idx],
+                artifacts.all_tag_matrix[top_indices],
+            )
+            primary_tag_jaccard = _tag_jaccard_scores(
+                artifacts.primary_tag_matrix[query_idx],
+                artifacts.primary_tag_matrix[top_indices],
+            )
+            all_tag_jaccard = _tag_jaccard_scores(
+                artifacts.all_tag_matrix[query_idx],
+                artifacts.all_tag_matrix[top_indices],
+            )
 
             row[f"Returned@{k}"] = returned
-            row[f"GenreHits@{k}"] = genre_hits
-            row[f"GenrePrecision@{k}"] = float(genre_hits / k)
-            row[f"GenreHitRate@{k}"] = float(1.0 if genre_hits > 0 else 0.0)
+            row[f"GenreHits@{k}"] = exact_genre_hits
+            row[f"GenrePrecision@{k}"] = float(exact_genre_hits / k)
+            row[f"GenreHitRate@{k}"] = float(1.0 if exact_genre_hits > 0 else 0.0)
+            row[f"PrimaryTagHits@{k}"] = int(primary_tag_hits.sum())
+            row[f"PrimaryTagPrecision@{k}"] = float(primary_tag_hits.sum() / k)
+            row[f"PrimaryTagHitRate@{k}"] = float(
+                1.0 if primary_tag_hits.sum() > 0 else 0.0
+            )
+            row[f"PrimaryTagJaccard@{k}"] = float(primary_tag_jaccard.sum() / k)
+            row[f"AllTagHits@{k}"] = int(all_tag_hits.sum())
+            row[f"AllTagPrecision@{k}"] = float(all_tag_hits.sum() / k)
+            row[f"AllTagHitRate@{k}"] = float(1.0 if all_tag_hits.sum() > 0 else 0.0)
+            row[f"AllTagJaccard@{k}"] = float(all_tag_jaccard.sum() / k)
             row[f"ArtistHits@{k}"] = artist_hits
             row[f"ArtistPrecision@{k}"] = float(artist_hits / k)
             row[f"ArtistHitRate@{k}"] = float(1.0 if artist_hits > 0 else 0.0)
@@ -668,6 +774,18 @@ def _evaluate_recommendations(
                 "MeanReturned": float(per_query[f"Returned@{k}"].mean()),
                 "GenrePrecision@K": float(per_query[f"GenrePrecision@{k}"].mean()),
                 "GenreHitRate@K": float(per_query[f"GenreHitRate@{k}"].mean()),
+                "PrimaryTagPrecision@K": float(
+                    per_query[f"PrimaryTagPrecision@{k}"].mean()
+                ),
+                "PrimaryTagHitRate@K": float(
+                    per_query[f"PrimaryTagHitRate@{k}"].mean()
+                ),
+                "PrimaryTagJaccard@K": float(
+                    per_query[f"PrimaryTagJaccard@{k}"].mean()
+                ),
+                "AllTagPrecision@K": float(per_query[f"AllTagPrecision@{k}"].mean()),
+                "AllTagHitRate@K": float(per_query[f"AllTagHitRate@{k}"].mean()),
+                "AllTagJaccard@K": float(per_query[f"AllTagJaccard@{k}"].mean()),
                 "ArtistPrecision@K": float(per_query[f"ArtistPrecision@{k}"].mean()),
                 "ArtistHitRate@K": float(per_query[f"ArtistHitRate@{k}"].mean()),
                 "CatalogCoverage": coverage,
@@ -795,17 +913,43 @@ def _fit_labels_for_method(
         return estimator.fit_predict(features).astype(int)
 
     if method_id == "gmm":
-        estimator = GaussianMixture(
-            n_components=int(params["n_components"]),
-            covariance_type=str(params["covariance_type"]),
-            reg_covar=float(params["reg_covar"]),
-            n_init=int(params.get("n_init", 10)),
-            max_iter=int(params.get("max_iter", 300)),
-            tol=float(params.get("tol", 1e-3)),
-            init_params=str(params.get("init_params", "kmeans")),
-            random_state=int(seed),
-        )
-        return estimator.fit_predict(features).astype(int)
+        features64 = np.asarray(features, dtype=np.float64)
+        base_reg_covar = max(float(params.get("reg_covar", 1e-5)), 1e-8)
+        reg_schedule: List[float] = []
+        reg_covar = base_reg_covar
+        for _ in range(7):
+            if not any(np.isclose(reg_covar, existing) for existing in reg_schedule):
+                reg_schedule.append(reg_covar)
+            reg_covar *= 10.0
+
+        last_error: Optional[Exception] = None
+        for attempt_index, reg_covar in enumerate(reg_schedule, start=1):
+            estimator = GaussianMixture(
+                n_components=int(params["n_components"]),
+                covariance_type=str(params["covariance_type"]),
+                reg_covar=float(reg_covar),
+                n_init=int(params.get("n_init", 10)),
+                max_iter=int(params.get("max_iter", 300)),
+                tol=float(params.get("tol", 1e-3)),
+                init_params=str(params.get("init_params", "kmeans")),
+                random_state=int(seed),
+            )
+            try:
+                labels = estimator.fit_predict(features64).astype(int)
+                if attempt_index > 1:
+                    warnings.warn(
+                        "GMM evaluation fit required stronger regularization; "
+                        f"seed={seed}, base_reg_covar={base_reg_covar}, "
+                        f"used_reg_covar={reg_covar}",
+                        RuntimeWarning,
+                        stacklevel=2,
+                    )
+                return labels
+            except (ValueError, np.linalg.LinAlgError) as exc:
+                last_error = exc
+
+        assert last_error is not None
+        raise last_error
 
     if method_id == "hdbscan":
         estimator = hdbscan.HDBSCAN(
@@ -1189,6 +1333,12 @@ def _build_method_summary_row(
         "Method": artifacts.display_name,
         "MethodId": artifacts.method_id,
         "RecommendationRankingK": int(ranking["K"]),
+        "PrimaryTagPrecision@K": float(ranking["PrimaryTagPrecision@K"]),
+        "PrimaryTagHitRate@K": float(ranking["PrimaryTagHitRate@K"]),
+        "PrimaryTagJaccard@K": float(ranking["PrimaryTagJaccard@K"]),
+        "AllTagPrecision@K": float(ranking["AllTagPrecision@K"]),
+        "AllTagHitRate@K": float(ranking["AllTagHitRate@K"]),
+        "AllTagJaccard@K": float(ranking["AllTagJaccard@K"]),
         "GenrePrecision@K": float(ranking["GenrePrecision@K"]),
         "GenreHitRate@K": float(ranking["GenreHitRate@K"]),
         "ArtistPrecision@K": float(ranking["ArtistPrecision@K"]),
@@ -1235,6 +1385,10 @@ def _build_method_summary_row(
 def _rank_methods(comparison_df: pd.DataFrame) -> pd.DataFrame:
     ranked = comparison_df.sort_values(
         by=[
+            "PrimaryTagJaccard@K",
+            "AllTagJaccard@K",
+            "PrimaryTagHitRate@K",
+            "AllTagHitRate@K",
             "GenrePrecision@K",
             "GenreHitRate@K",
             "ArtistPrecision@K",
@@ -1244,7 +1398,20 @@ def _rank_methods(comparison_df: pd.DataFrame) -> pd.DataFrame:
             "SubsampleMedianARI",
             "SubsampleMeanARI",
         ],
-        ascending=[False, False, False, False, False, False, False, False],
+        ascending=[
+            False,
+            False,
+            False,
+            False,
+            False,
+            False,
+            False,
+            False,
+            False,
+            False,
+            False,
+            False,
+        ],
         kind="stable",
     ).reset_index(drop=True)
     ranked.insert(0, "OverallRank", np.arange(1, len(ranked) + 1, dtype=int))
@@ -1271,7 +1438,11 @@ def _write_markdown_report(
     lines.append("## Ranking basis")
     lines.append("")
     lines.append(
-        "- Primary metrics at K=10: genre precision, genre hit rate, artist precision, artist hit rate."
+        "- Primary metrics at K=10: taxonomy-aware primary-tag Jaccard, all-tag Jaccard, "
+        "primary-tag hit rate, all-tag hit rate, artist precision, and artist hit rate."
+    )
+    lines.append(
+        "- Exact primary-genre match metrics are still reported, but only as continuity diagnostics."
     )
     lines.append(
         "- Recommendation breadth checks: catalog coverage and item exposure diversity."
@@ -1364,7 +1535,12 @@ def _write_markdown_report(
         lines.append(f"## {row['Method']}")
         lines.append("")
         lines.append(
-            f"- Recommendation@10: genre precision {row['GenrePrecision@K']:.4f}, "
+            f"- Recommendation@10 taxonomy metrics: primary-tag Jaccard {row['PrimaryTagJaccard@K']:.4f}, "
+            f"all-tag Jaccard {row['AllTagJaccard@K']:.4f}, primary-tag hit rate {row['PrimaryTagHitRate@K']:.4f}, "
+            f"all-tag hit rate {row['AllTagHitRate@K']:.4f}"
+        )
+        lines.append(
+            f"- Exact-primary continuity metrics: genre precision {row['GenrePrecision@K']:.4f}, "
             f"genre hit rate {row['GenreHitRate@K']:.4f}, artist precision {row['ArtistPrecision@K']:.4f}, "
             f"artist hit rate {row['ArtistHitRate@K']:.4f}"
         )
@@ -1393,6 +1569,12 @@ def _write_markdown_report(
         rec_summary = rec_summary[
             [
                 "K",
+                "PrimaryTagPrecision@K",
+                "PrimaryTagHitRate@K",
+                "PrimaryTagJaccard@K",
+                "AllTagPrecision@K",
+                "AllTagHitRate@K",
+                "AllTagJaccard@K",
                 "GenrePrecision@K",
                 "GenreHitRate@K",
                 "ArtistPrecision@K",

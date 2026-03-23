@@ -82,8 +82,27 @@ def run_download_step(project_root: Path, py: str) -> None:
     print("  - Failed downloads will be cleaned up automatically")
     print("  - Results saved to unified metadata in data/songs.csv")
     print("  - Audio files saved to audio_files/")
+    print("  - Resilient watchdog restarts stalled download sessions automatically")
 
-    run([py, "src/data_collection/deezer-song.py"])
+    print("\nRebuilding the unified metadata catalog before download...")
+    run([py, "scripts/utilities/migrate_to_unified_csv.py"])
+
+    run(
+        [
+            py,
+            "scripts/utilities/run_resilient_download.py",
+            "--chunk-size",
+            "500",
+            "--idle-timeout-sec",
+            "240",
+            "--max-stall-restarts",
+            "20",
+            "--max-no-progress-sessions",
+            "2",
+            "--log-dir",
+            "docs/reports/run_logs/latest_resilient_download",
+        ]
+    )
 
     print("\n" + "=" * 60)
     print("Validating download results...")
@@ -147,6 +166,9 @@ def run_preprocessing_step(py: str) -> None:
             str(fv.baseline_max_true_peak_dbtp),
         ]
     )
+
+    print("Rebuilding unified metadata after preprocessing...")
+    run([py, "scripts/utilities/migrate_to_unified_csv.py"])
 
     print("=" * 60)
     print("Audio preprocessing complete!")

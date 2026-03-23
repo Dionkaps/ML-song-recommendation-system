@@ -10,6 +10,7 @@ import json
 import math
 import os
 import sys
+import warnings
 from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime
@@ -42,6 +43,7 @@ os.chdir(PROJECT_ROOT)
 
 from config import feature_vars as fv  # noqa: E402
 from src.clustering.kmeans import _collect_feature_vectors, _load_genre_mapping  # noqa: E402
+from src.utils.genre_taxonomy import resolve_pipeline_songs_csv  # noqa: E402
 
 
 DEFAULT_RESULTS_DIR = Path("output/features")
@@ -189,6 +191,23 @@ def import_hdbscan():
         if removed:
             sys.path.insert(0, script_dir)
     return hdbscan, validity_index
+
+
+def compute_hdbscan_dbcv_safely(
+    validity_index,
+    data64: np.ndarray,
+    labels: np.ndarray,
+) -> float:
+    """Return a finite DBCV score or NaN when the external validity code is unstable."""
+
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            score = float(validity_index(data64, labels))
+    except Exception:
+        return float("nan")
+
+    return score if np.isfinite(score) else float("nan")
 
 
 def ensure_dir(path: Path) -> Path:
@@ -582,10 +601,11 @@ def evaluate_hdbscan(
         if n_clusters >= 2 and mask.sum() > n_clusters:
             metrics = compute_metrics(data64[mask], labels[mask], true_labels[mask])
             row.update(metrics)
-            try:
-                row["dbcv"] = float(validity_index(data64, labels))
-            except Exception:
-                row["dbcv"] = float("nan")
+            row["dbcv"] = compute_hdbscan_dbcv_safely(
+                validity_index=validity_index,
+                data64=data64,
+                labels=labels,
+            )
         else:
             row.update(
                 {
@@ -700,10 +720,21 @@ def load_or_build_raw_cache(
     preferred_cache_path: Optional[Path],
     output_cache_path: Path,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    resolved_songs_csv = resolve_pipeline_songs_csv("data/songs.csv")
+    songs_csv_signature = (
+        f"{resolved_songs_csv}:{int(resolved_songs_csv.stat().st_mtime)}:"
+        f"{resolved_songs_csv.stat().st_size}"
+    )
     cache_candidates = [preferred_cache_path, DEFAULT_EXISTING_CACHE]
     for cache_path in cache_candidates:
         if cache_path and cache_path.exists():
             cache = np.load(cache_path, allow_pickle=True)
+            cached_signature_values = cache.get("songs_csv_signature")
+            if cached_signature_values is None:
+                continue
+            cached_signature = str(np.asarray(cached_signature_values).reshape(-1)[0])
+            if cached_signature != songs_csv_signature:
+                continue
             X = np.asarray(cache["X"], dtype=np.float32)
             file_names = np.asarray(cache["file_names"])
             genres = np.asarray(cache["genres"])
@@ -714,19 +745,26 @@ def load_or_build_raw_cache(
         results_dir=str(results_dir),
         include_genre=False,
     )
-    file_names, feature_vectors, genres = _collect_feature_vectors(
+    file_names, feature_vectors, genres, _qc_rows, _qc_summary = _collect_feature_vectors(
         audio_dir=str(audio_dir),
         results_dir=str(results_dir),
         genre_map=genre_map,
         unique_genres=unique_genres,
         include_genre=False,
         include_msd=False,
-        songs_csv_path=None,
+        songs_csv_path=str(resolved_songs_csv),
+        selected_audio_feature_keys=list(fv.AUDIO_FEATURE_KEYS),
     )
     X = np.vstack(feature_vectors).astype(np.float32)
     file_names_arr = np.asarray(file_names)
     genres_arr = np.asarray(genres)
-    np.savez_compressed(output_cache_path, X=X, file_names=file_names_arr, genres=genres_arr)
+    np.savez_compressed(
+        output_cache_path,
+        X=X,
+        file_names=file_names_arr,
+        genres=genres_arr,
+        songs_csv_signature=np.asarray([songs_csv_signature]),
+    )
     return X, file_names_arr, genres_arr
 
 

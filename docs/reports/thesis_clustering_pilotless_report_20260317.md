@@ -1,4 +1,4 @@
-# Pilot-Free Thesis Clustering Report
+# Pilot-Free Thesis Clustering Report (Taxonomy-Aware Update)
 
 ## 1. Purpose of This Report
 
@@ -12,7 +12,7 @@ thesis experiment itself as the main study.
 Everything in this report is based on:
 
 - a prespecified representation space derived from standard Music Information Retrieval feature families
-- full-dataset evaluation on the current repository dataset
+- full downloaded-audio evaluation after taxonomy-aware genre reassignment
 - direct comparison of KMeans, Gaussian Mixture Models, and HDBSCAN
 - multiple evaluation views rather than a single headline score
 
@@ -31,35 +31,42 @@ This report is intentionally detailed. It explains:
 
 ### 2.1 One-paragraph summary
 
-The pilot-free thesis benchmark evaluated `14` prespecified audio representations across `3`
-preprocessing modes and `3` clustering algorithms on the full dataset of `5,535` songs. This produced
-`42` representation/preprocessing scenarios and `3,738` fitted clustering models. The results show that
-there is still no single universal winner. KMeans and GMM usually collapse to very coarse native
-solutions, while HDBSCAN is the only method that consistently discovers rich fine-grained native
-structure. The strongest practical native result in the new benchmark is `HDBSCAN + rhythm_only +
-pca_per_group_2`, which produced `576` clusters with only `8.3%` noise, `silhouette=0.566`,
-`NMI=0.547`, and `stability_ari=0.875`. The highest raw NMI overall was
-`HDBSCAN + delta2_mfcc_only + pca_per_group_5` with `NMI=0.588`, but that solution marked almost
-`60%` of the dataset as noise, so it is not the most defensible headline result. Under matched
-medium-granularity comparison, KMeans was the strongest balanced method overall, GMM was competitive and
-occasionally slightly stronger on NMI at high target counts, and HDBSCAN produced some very high-NMI
-matched candidates only by discarding most songs as noise. The thesis conclusion is therefore conditional:
-HDBSCAN is strongest for native fine-grained discovery, while KMeans is the strongest balanced method for
-medium-granularity full-coverage clustering.
+This updated report reran the pilot-free thesis benchmark after replacing the raw genre labels with the
+merged taxonomy in `data/acoustically_coherent_merged_genres_corrected.csv`. The new preprocessing step
+creates `data/songs_with_merged_genres.csv`, promotes only non-`non_genre_*` mapped tags to primary genre
+status, keeps `non_genre_*` tags as secondary metadata, and excludes songs that have no mapped primary
+genre at all. That left `5,456` audio-backed songs for benchmarking out of `5,535` downloaded tracks,
+with `187` taxonomy-backed primary genres and `3,038` artists. The pilot-free benchmark still evaluated
+`14` prespecified audio representations across `3` preprocessing modes and `3` clustering algorithms,
+yielding `42` representation/preprocessing scenarios and `3,738` fitted models. The strongest practical
+native result remains `HDBSCAN + rhythm_only + pca_per_group_2`, now with `563` clusters, `8.5%` noise,
+`silhouette=0.569`, `NMI=0.453`, and `stability_ari=0.887`. The highest raw NMI overall is now
+`HDBSCAN + pitch_rhythm + pca_per_group_2` with `NMI=0.483`, but that solution discards `46.0%` of the
+collection as noise, so it is not the best thesis headline. Under matched-granularity comparison, KMeans
+remains the strongest balanced method overall, GMM remains highly competitive and sometimes slightly
+stronger on raw NMI at higher target counts, and HDBSCAN remains the most interesting native discovery
+method but not the strongest full-coverage matched method. In the downstream taxonomy-aware recommendation
+rerun with multivector primary/secondary tags, KMeans ranked first, GMM second by a very small margin,
+and HDBSCAN third.
 
 ### 2.2 High-level findings
 
-1. Removing the pilot changed the story materially.
-2. The new full-space benchmark exposed strong representations that the pilot flow did not privilege,
-   especially `rhythm_only`, `pitch_only`, and `mfcc_only`.
-3. HDBSCAN is still the most interesting method scientifically, but not for the same reason as before.
-4. The old pilot narrative around `delta2_mfcc` remains partly true, but it is no longer the only or
-   clearly dominant story once the search space is widened and no pilot promotion is used.
-5. KMeans remains a very strong benchmark method when the comparison is made at matched cluster
-   granularity.
-6. GMM remains a legitimate soft-clustering alternative and slightly exceeds KMeans on NMI in some
-   high-target full-audio settings.
-7. Raw best-score claims can be misleading if coverage and noise are ignored, especially for HDBSCAN.
+1. The merged-genre taxonomy changed the evaluation regime materially by compressing the benchmark label
+   space from noisy raw genres to `187` curated primary taxonomy labels.
+2. `79` downloaded songs were excluded from the MRS benchmark because every mapped tag fell under a
+   `non_genre_*` bucket and no real primary genre remained.
+3. HDBSCAN is still the strongest method for native fine-grained unsupervised discovery, and
+   `rhythm_only + pca_per_group_2` remains its most defensible native thesis result.
+4. The old `delta2_mfcc` headline no longer survives the taxonomy-aware rerun: the top raw-NMI row is now
+   `pitch_rhythm + pca_per_group_2`, and the best practical native leader is still rhythmic rather than
+   delta-delta timbral.
+5. KMeans remains the strongest balanced method when cluster granularity is matched and full coverage
+   matters.
+6. GMM remains a legitimate soft-clustering alternative and is nearly tied with KMeans in the production
+   recommendation rerun, but it still fails the explicit stability gate.
+7. Taxonomy-aware multivector evaluation is more informative than exact single-label genre agreement for
+   downstream recommendation quality because it rewards shared primary tags and shared secondary context
+   rather than only exact one-label equality.
 
 ## 3. Why the Pilot Was Removed
 
@@ -134,14 +141,45 @@ These answer different questions:
 
 ## 5.1 Dataset
 
-The benchmark was run on the full current dataset:
+The benchmark was run on the full current downloaded-audio subset after taxonomy reassignment:
 
-- songs: `5,535`
-- unique primary genres: `419`
-- unique artists: `3,094`
+- songs evaluated: `5,456`
+- downloaded songs before taxonomy filtering: `5,535`
+- unique primary genres: `187`
+- unique artists: `3,038`
 - raw audio feature dimensions: `116`
 
 No subset-stage shortlist was used.
+
+The audio-backed benchmark subset now comes from a larger taxonomy-building step over the full song table:
+
+- total rows in `songs.csv`: `10,691`
+- rows retained for MRS after taxonomy reassignment: `10,544`
+- rows excluded because they only mapped to `non_genre_*` tags: `147`
+- audio-backed excluded rows: `79`
+
+### 5.1.1 Taxonomy reassignment and eligibility rule
+
+This update introduces a new preprocessing stage driven by
+`data/acoustically_coherent_merged_genres_corrected.csv`.
+
+For every song, the pipeline now:
+
+1. maps each source genre tag into the merged taxonomy
+2. stores mapped non-`non_genre_*` tags as primary-genre candidates
+3. stores mapped `non_genre_*` tags as secondary descriptive tags
+4. writes both sets plus their union into `data/songs_with_merged_genres.csv`
+5. excludes the song from the MRS benchmark if no mapped primary genre remains
+
+That means the benchmark and recommender now use:
+
+- `mapped_primary_genres` for primary taxonomy identity
+- `mapped_secondary_tags` for non-genre context such as scene, region, instrument, or spoken/comedy labels
+- `mapped_all_tags` for multivector overlap evaluation downstream
+
+This matters scientifically because the benchmark is no longer evaluating against the raw source-label
+space. It is evaluating against a smaller, more acoustically coherent taxonomy while preserving
+non-genre metadata separately instead of letting it masquerade as a primary genre.
 
 ## 5.2 Representation space
 
@@ -319,9 +357,9 @@ For each parameter pair, the code:
 5. evaluates clustering quality only on the non-noise subset for metrics that require assigned clusters
 6. tries to compute DBCV as a density-validity metric
 
-The search space for this dataset size (`5,535` songs) is generated from:
+The search space for this dataset size (`5,456` songs) is generated from:
 
-- `min_cluster_size` values: `5`, `8`, `10`, `15`, `25`, `111`, `221`
+- `min_cluster_size` values: `5`, `8`, `10`, `15`, `25`, `109`, `218`
 - `min_samples` values derived from `{1, 2, 5, min_cluster_size // 2, min_cluster_size}`
 
 After removing invalid duplicates, this gives `32` HDBSCAN settings in the full benchmark.
@@ -380,7 +418,8 @@ dataset is larger than that.
 
 #### `nmi`
 
-This is normalized mutual information between cluster labels and primary genre labels.
+This is normalized mutual information between cluster labels and the taxonomy-aware primary genre label
+used for benchmarking.
 
 Interpretation:
 
@@ -511,6 +550,31 @@ Interpretation:
 
 This is an important nuance in the report because a HDBSCAN stability score is not directly the same kind
 of object as a KMeans or GMM seed-stability score. It is closer to a subsampling robustness estimate.
+
+### 5.5.4 Taxonomy-aware multivector recommendation metrics
+
+The downstream production rerun does not rely only on exact single-label genre agreement.
+
+After taxonomy reassignment, each song has three tag views:
+
+- `mapped_primary_genres`
+- `mapped_secondary_tags`
+- `mapped_all_tags`
+
+For the recommendation evaluation, those comma-separated tag lists are binarized into multivector form.
+At each `K`, the evaluation then computes:
+
+- `PrimaryTagPrecision@K`: fraction of returned songs that share at least one mapped primary tag with the
+  query
+- `PrimaryTagHitRate@K`: whether the query receives at least one primary-tag-overlap recommendation
+- `PrimaryTagJaccard@K`: average Jaccard overlap between the query primary-tag set and each returned song
+- `AllTagPrecision@K`, `AllTagHitRate@K`, `AllTagJaccard@K`: the same metrics on the union of primary and
+  secondary tags
+- `GenrePrecision@K` and `GenreHitRate@K`: exact single-primary-label continuity diagnostics only
+
+This is a materially better downstream evaluation design for the merged taxonomy because it rewards shared
+primary genre identity and shared secondary context instead of treating every song as if it had only one
+meaningful label.
 
 ## 5.6 Selection regimes
 
@@ -654,17 +718,27 @@ The script [thesis_clustering_benchmark.py](c:/Users/vpddk/Desktop/Me/Github/ML-
 
 - it no longer performs subset-stage or pilot-stage shortlisting
 - it no longer uses promotion from exploratory scenarios
+- it resolves the taxonomy-aware song table automatically
 - it evaluates the full prespecified representation space directly
 - it writes a `representation_catalog.csv`
 - it writes full-grid, per-scenario native, per-scenario matched, and global-leader CSVs
+- it records taxonomy-aware metadata paths in the benchmark bundle
+
+In addition, the repository now contains:
+
+- a taxonomy-builder utility that creates `data/songs_with_merged_genres.csv`
+- a taxonomy helper module that exposes mapped primary genres, mapped secondary tags, and MRS inclusion
+  flags
+- an updated recommendation evaluator that scores retrieval quality with multivector primary-tag and
+  all-tag overlap metrics
 
 The key output bundle from the final run is:
 
-- `output/metrics/thesis_benchmark_pilotless_full_2026-03-17`
+- `output/metrics/thesis_benchmark_taxonomy_full_2026-03-19`
 
-The smoke-validation bundle is:
+The downstream production rerun bundle is:
 
-- `output/metrics/thesis_benchmark_pilotless_smoke_2026-03-17`
+- `output/experiment_runs_taxonomy/run_20260319_140333Z/recommended_production`
 
 ### 6.1 End-to-end program flow
 
@@ -708,15 +782,20 @@ The script uses [song_metadata.py](c:/Users/vpddk/Desktop/Me/Github/ML-song-reco
 to build an aligned metadata table for the audio files. That table gives the benchmark:
 
 - artist names
-- primary genre labels
-- genre lists
+- original primary genre labels
+- mapped primary genre labels
+- mapped secondary tags
+- mapped full tag lists
+- MRS inclusion status
 - normalized artist keys
 
 Even though the pilot-free benchmark does not use artist-aware shortlisting anymore, aligned metadata still
 matters because:
 
-- genre labels are needed for external evaluation metrics
+- taxonomy-aware primary genre labels are needed for external benchmark metrics
+- secondary tags are needed for multivector recommendation evaluation
 - artist and genre counts are part of dataset characterization
+- excluded non-genre-only songs must be filtered consistently before any clustering step
 - the output bundle becomes easier to audit and interpret later
 
 ### 6.3 Exact outputs written by the benchmark
@@ -740,95 +819,73 @@ the pipeline rather than being a redundant export.
 
 ## 7. Execution Log
 
-## 7.1 Smoke run
+## 7.1 Taxonomy dataset build
 
-Purpose:
+Before rerunning the benchmark, the song metadata was rebuilt with the merged taxonomy so that raw genres,
+taxonomy-backed primary genres, and secondary `non_genre_*` tags were separated explicitly.
 
-- validate the new pilot-free code path on the full dataset before the expensive full run
-
-Command logic:
-
-- reduced `max_k` and `max_components` to `6`
-- matched targets reduced to `4` and `8`
-- kept the full representation space
-
-Observed runtime:
-
-- approximately `3,811.3` seconds
-- approximately `63.5` minutes
-
-Outcome:
-
-- completed successfully
-- produced the expected artifact set
-- confirmed that the new representation catalog and direct full-space evaluation path worked
-
-## 7.2 Full run
-
-The full benchmark was then executed with the full target list and full KMeans/GMM parameter ranges.
-
-Observed runtime:
-
-- approximately `5,508.6` seconds
-- approximately `91.8` minutes
-
-Final bundle:
-
-- `output/metrics/thesis_benchmark_pilotless_full_2026-03-17`
-
-### 7.3 Exact command used for the main benchmark
-
-The pilot-free full run was executed with:
+Command:
 
 ```powershell
-.venv\Scripts\python.exe scripts\analysis\thesis_clustering_benchmark.py `
-  --output-dir output\metrics\thesis_benchmark_pilotless_full_2026-03-17
+.venv\Scripts\python.exe scripts\utilities\build_merged_genre_dataset.py
 ```
 
-The benchmark used the script defaults for:
+Output:
 
-- matched targets: `4 8 12 16 20`
-- matched band fraction: `0.25`
-- KMeans maximum `k`: `20`
-- GMM maximum components: `20`
+- `data/songs_with_merged_genres.csv`
 
-### 7.4 Independent revalidation run
+Observed dataset outcome:
 
-After the first full pilot-free report was written, the benchmark was run again independently in order to
-check whether the thesis conclusions were stable.
+- `10,691` total songs in the source table
+- `10,544` rows retained for MRS
+- `147` rows excluded because they had no mapped primary genre
+- `5,456` downloaded songs retained for clustering and benchmarking
 
-Revalidation bundle:
+## 7.2 Full taxonomy-aware benchmark rerun
 
-- `output/metrics/thesis_benchmark_pilotless_revalidation_2026-03-17`
+The full benchmark was then rerun against the taxonomy-aware song table with the same pilot-free search
+space.
 
 Command:
 
 ```powershell
 .venv\Scripts\python.exe scripts\analysis\thesis_clustering_benchmark.py `
-  --output-dir output\metrics\thesis_benchmark_pilotless_revalidation_2026-03-17
+  --output-dir output\metrics\thesis_benchmark_taxonomy_full_2026-03-19
 ```
 
-Observed runtime:
+Final bundle:
 
-- approximately `5,492.7` seconds
-- approximately `91.5` minutes
+- `output/metrics/thesis_benchmark_taxonomy_full_2026-03-19`
 
-Key revalidation finding:
+Key dataset summary written by that run:
 
-- the substantive conclusions held
+- songs evaluated: `5,456`
+- unique primary genres: `187`
+- unique artists: `3,038`
+- raw audio dimensions: `116`
+- representations: `14`
+- preprocessing modes: `3`
+- matched targets: `4 8 12 16 20`
 
-What remained exactly the same:
+## 7.3 Targeted validation and production rerun
 
-- representation catalog
-- variance summary
-- correlation summary
-- global native leader identities
-- the top-10 NMI rows in the full grid
+During implementation, a targeted taxonomy-aware smoke validation was used to verify that the raw cache,
+feature-collection path, and benchmark scorer were compatible with the new metadata contract. After that,
+the full production clustering and recommendation comparison were rerun.
 
-What changed slightly:
+Command:
 
-- fit times
-- timestamps
+```powershell
+.venv\Scripts\python.exe scripts\run_all_clustering.py `
+  --profiles recommended_production `
+  --run-root output\experiment_runs_taxonomy
+```
+
+Final production bundle:
+
+- `output/experiment_runs_taxonomy/run_20260319_140333Z/recommended_production`
+
+This rerun is the source of the taxonomy-aware recommendation metrics reported later in this document.
 - very small floating-point drift in a small minority of rows
 - tiny internal-score differences that did not change the thesis conclusions
 
@@ -1121,218 +1178,211 @@ single NMI row as the best thesis-level conclusion.
 
 Global native leaders selected by the benchmark were:
 
-| Method | Representation | Preprocess | Clusters | Silhouette | NMI | Stability |
-|---|---|---|---:|---:|---:|---:|
-| KMeans | `mfcc_only` | `raw_zscore` | `2` | `0.193` | `0.047` | `1.000` |
-| GMM | `mfcc_only` | `pca_per_group_2` | `3` | `0.354` | `0.081` | `0.988` |
-| HDBSCAN | `rhythm_only` | `pca_per_group_2` | `576` | `0.566` | `0.547` | `0.875` |
+| Method | Representation | Preprocess | Clusters | Coverage | Noise | Silhouette | NMI | Stability |
+|---|---|---|---:|---:|---:|---:|---:|---:|
+| KMeans | `mfcc_only` | `raw_zscore` | `2` | `1.000` | `0.000` | `0.194` | `0.040` | `0.999` |
+| GMM | `delta_mfcc_only` | `pca_per_group_5` | `2` | `1.000` | `0.000` | `0.290` | `0.043` | `0.995` |
+| HDBSCAN | `rhythm_only` | `pca_per_group_2` | `563` | `0.915` | `0.085` | `0.569` | `0.453` | `0.887` |
 
-This already shows that removing the pilot changed the thesis story in a major way.
+This updated native table changes the thesis story in two important ways.
 
-Under the new design:
+First, the taxonomy-aware label space compresses the semantic evaluation problem. As a result, the native
+parametric leaders still prefer extremely coarse solutions and therefore post very small `NMI` values.
+Second, HDBSCAN remains the only method that discovers rich native fine-grained structure at a practical
+coverage level.
 
-- the strongest practical native HDBSCAN result is no longer the earlier `delta2_mfcc` story
-- it is `rhythm_only + pca_per_group_2`
+The strongest practical native thesis result is still:
 
-That result also has strong practicality diagnostics:
-
-- coverage: `0.917`
-- noise fraction: `0.083`
-- largest cluster fraction: `0.0055`
-
-This is a much stronger practical native result than a high-NMI solution that leaves most of the dataset
-unassigned.
+- `HDBSCAN + rhythm_only + pca_per_group_2`
+- `563` clusters
+- `91.5%` coverage
+- `8.5%` noise
+- `silhouette=0.569`
+- `NMI=0.453`
+- `stability_ari=0.887`
 
 ## 10.2 Highest raw NMI overall
 
-The highest raw NMI in the entire full grid was:
+The highest raw `NMI` anywhere in the full benchmark grid is now:
 
 - method: `HDBSCAN`
-- representation: `delta2_mfcc_only`
-- preprocess: `pca_per_group_5`
+- representation: `pitch_rhythm`
+- preprocess: `pca_per_group_2`
 - parameters: `min_cluster_size=5`, `min_samples=1`
-- clusters: `281`
-- silhouette: `0.215`
-- NMI: `0.588`
-- noise fraction: `0.600`
+- clusters: `333`
+- coverage: `0.540`
+- noise fraction: `0.460`
+- silhouette: `0.220`
+- NMI: `0.483`
 
-This is scientifically interesting, but it is not the best headline conclusion for the thesis because:
+This row is scientifically interesting, but it is still not the best thesis headline result because it
+rejects almost half of the collection as noise. The taxonomy-aware rerun therefore keeps the same
+interpretive principle as before:
 
-- almost `60%` of songs were labeled as noise
-- its native stability was only `0.293`
-- the solution is much less practical as a full-collection clustering than the HDBSCAN `rhythm_only`
-  native leader
+- the single highest semantic score is not automatically the most defensible thesis conclusion
 
-The key research lesson is:
+It also changes the old narrative materially:
 
-- highest raw semantic score is not automatically the best scientific conclusion
+- `delta2_mfcc_only` is no longer the raw-NMI headline representation
+- the best raw semantic row is now a joint harmonic-rhythmic representation
 
 ## 10.3 Native cluster-count behavior by method
 
-The native cluster-count summaries reveal a very strong method effect.
+The native cluster-count summaries still reveal a strong method effect.
 
 ### KMeans
 
-- native selections with more than 2 clusters: `2` out of `42`
+- native selections with more than `2` clusters: `2` out of `42`
 - maximum native cluster count: `3`
 
 Interpretation:
 
-- KMeans almost always collapsed to a very coarse 2-cluster solution when allowed to optimize only its
-  internal criteria
+- KMeans almost always collapses to a very coarse solution when judged only by its internal geometry
 
 ### GMM
 
-- native selections with more than 2 clusters: `9` out of `42`
-- maximum native cluster count: `12`
+- native selections with more than `2` clusters: `9` out of `42`
+- maximum native cluster count: `10`
 
 Interpretation:
 
-- GMM was somewhat more willing than KMeans to accept richer native structure
-- but it still mostly preferred very coarse partitions
+- GMM is somewhat more flexible than KMeans in native mode
+- but it still mostly prefers very coarse partitions
 
 ### HDBSCAN
 
-- native selections with more than 2 clusters: `8` out of `42`
-- maximum native cluster count: `576`
+- native selections with more than `2` clusters: `12` out of `42`
+- maximum native cluster count: `563`
 
 Interpretation:
 
-- HDBSCAN is the only method that repeatedly discovered rich native fine-grained structure
-- but it also produced many 2-cluster native solutions on other representations
-
-This means the thesis should not say:
-
-- "HDBSCAN always finds many clusters"
-
-It should say:
-
-- "HDBSCAN is the only method in this study that can discover very rich native structure, but whether it
-  does so depends strongly on the representation."
+- HDBSCAN is still the only method in this study that repeatedly discovers genuinely rich native
+  structure
+- but whether it does so depends strongly on the representation
 
 ## 10.4 Matched-granularity leaders selected by internal criteria
 
 The benchmark also computed global matched-granularity leaders by method and target, using the benchmark's
-matched selection logic rather than raw NMI alone.
+matched selection logic rather than raw `NMI` alone.
 
-| Target | Method | Representation | Preprocess | Clusters | Silhouette | NMI | Stability |
-|---:|---|---|---|---:|---:|---:|---:|
-| 4 | KMeans | `pitch_rhythm` | `pca_per_group_2` | `4` | `0.237` | `0.118` | `0.987` |
-| 4 | GMM | `mfcc_only` | `pca_per_group_2` | `4` | `0.357` | `0.090` | `0.845` |
-| 4 | HDBSCAN | `spectral_pitch` | `pca_per_group_2` | `4` | `0.162` | `0.006` | `1.000` |
-| 8 | KMeans | `pitch_rhythm` | `pca_per_group_5` | `8` | `0.149` | `0.148` | `0.925` |
-| 8 | GMM | `pitch_rhythm` | `pca_per_group_2` | `8` | `0.185` | `0.153` | `0.608` |
-| 8 | HDBSCAN | `spectral_rhythm` | `pca_per_group_2` | `8` | `0.146` | `0.015` | `1.000` |
-| 12 | KMeans | `pitch_only` | `pca_per_group_2` | `12` | `0.335` | `0.160` | `0.942` |
-| 12 | GMM | `rhythm_only` | `pca_per_group_2` | `12` | `0.342` | `0.144` | `0.732` |
-| 12 | HDBSCAN | `rhythm_only` | `pca_per_group_2` | `12` | `-0.015` | `0.115` | `0.953` |
-| 16 | KMeans | `pitch_only` | `pca_per_group_2` | `16` | `0.337` | `0.180` | `0.907` |
-| 16 | GMM | `rhythm_only` | `pca_per_group_2` | `16` | `0.328` | `0.167` | `0.551` |
-| 16 | HDBSCAN | `rhythm_only` | `raw_zscore` | `15` | `0.002` | `0.186` | `0.819` |
-| 20 | KMeans | `rhythm_only` | `pca_per_group_2` | `20` | `0.337` | `0.183` | `0.582` |
-| 20 | GMM | `mfcc_only` | `pca_per_group_2` | `20` | `0.315` | `0.200` | `0.516` |
-| 20 | HDBSCAN | `rhythm_only` | `pca_per_group_2` | `20` | `-0.208` | `0.158` | `0.944` |
+| Target | Method | Representation | Preprocess | Clusters | Coverage | Silhouette | NMI | Stability |
+|---:|---|---|---|---:|---:|---:|---:|---:|
+| 4 | KMeans | `pitch_rhythm` | `pca_per_group_2` | `4` | `1.000` | `0.240` | `0.104` | `0.989` |
+| 4 | GMM | `mfcc_only` | `pca_per_group_2` | `4` | `1.000` | `0.345` | `0.075` | `0.923` |
+| 4 | HDBSCAN | `spectral_pitch` | `pca_per_group_2` | `4` | `0.959` | `0.162` | `0.005` | `0.876` |
+| 8 | KMeans | `pitch_rhythm` | `pca_per_group_5` | `8` | `1.000` | `0.152` | `0.121` | `0.973` |
+| 8 | GMM | `pitch_rhythm` | `pca_per_group_2` | `8` | `1.000` | `0.188` | `0.127` | `0.577` |
+| 8 | HDBSCAN | `spectral_rhythm` | `raw_zscore` | `8` | `0.207` | `0.110` | `0.132` | `0.949` |
+| 12 | KMeans | `pitch_only` | `pca_per_group_2` | `12` | `1.000` | `0.337` | `0.123` | `0.921` |
+| 12 | GMM | `mfcc_only` | `pca_per_group_5` | `12` | `1.000` | `0.125` | `0.143` | `0.458` |
+| 12 | HDBSCAN | `rhythm_only` | `pca_per_group_2` | `12` | `0.914` | `-0.035` | `0.068` | `0.896` |
+| 16 | KMeans | `pitch_only` | `pca_per_group_2` | `16` | `1.000` | `0.335` | `0.134` | `0.878` |
+| 16 | GMM | `pitch_only` | `pca_per_group_5` | `16` | `1.000` | `0.124` | `0.145` | `0.502` |
+| 16 | HDBSCAN | `rhythm_only` | `pca_per_group_5` | `16` | `0.518` | `-0.027` | `0.120` | `0.697` |
+| 20 | KMeans | `rhythm_only` | `pca_per_group_2` | `20` | `1.000` | `0.341` | `0.133` | `0.707` |
+| 20 | GMM | `mfcc_only` | `pca_per_group_2` | `20` | `1.000` | `0.308` | `0.152` | `0.517` |
+| 20 | HDBSCAN | `rhythm_only` | `pca_per_group_2` | `20` | `0.844` | `-0.141` | `0.097` | `0.947` |
 
-These internal-selection matched leaders support three important conclusions.
+These internal-selection matched leaders support three thesis-level conclusions.
 
-1. KMeans is the strongest balanced method overall.
-2. GMM is competitive, especially at target `8` and target `20`.
-3. HDBSCAN is not the strongest balanced medium-granularity method even though it is the strongest
+1. KMeans remains the strongest balanced matched method overall.
+2. GMM is competitive and occasionally stronger on `NMI`, but its stability degrades as target count grows.
+3. HDBSCAN is still not the strongest balanced medium-granularity method even though it is the strongest
    native fine-grained discovery method.
 
 ## 10.5 Matched semantic leaders and why they must be read carefully
 
-If we ignore practicality and simply ask for the highest NMI row inside each matched-target/method group,
-the story changes.
+If we ignore the internal matched-selection logic and simply ask for the highest `NMI` row inside each
+matched-target and method group, the story changes again.
 
 ### Best matched NMI by target and method
 
 | Target | Method | Representation | Preprocess | Clusters | Gap | Coverage | NMI | Silhouette | Stability |
 |---:|---|---|---|---:|---:|---:|---:|---:|---:|
-| 4 | KMeans | `all_audio` | `pca_per_group_2` | `4` | `0` | `1.000` | `0.128` | `0.179` | `0.996` |
-| 4 | GMM | `all_audio` | `raw_zscore` | `4` | `0` | `1.000` | `0.132` | `0.047` | `0.981` |
-| 4 | HDBSCAN | `pitch_rhythm` | `raw_zscore` | `4` | `0` | `0.020` | `0.416` | `0.289` | `0.716` |
-| 8 | KMeans | `timbre_pitch` | `raw_zscore` | `8` | `0` | `1.000` | `0.175` | `0.027` | `0.928` |
-| 8 | GMM | `timbre_pitch` | `raw_zscore` | `8` | `0` | `1.000` | `0.175` | `0.020` | `0.454` |
-| 8 | HDBSCAN | `spectral_pitch` | `raw_zscore` | `10` | `2` | `0.023` | `0.585` | `0.175` | `0.268` |
-| 12 | KMeans | `timbre_pitch_rhythm` | `raw_zscore` | `12` | `0` | `1.000` | `0.199` | `0.024` | `0.765` |
-| 12 | GMM | `timbre_pitch_rhythm` | `pca_per_group_5` | `12` | `0` | `1.000` | `0.199` | `0.029` | `0.618` |
-| 12 | HDBSCAN | `spectral_pitch` | `raw_zscore` | `10` | `2` | `0.023` | `0.585` | `0.175` | `0.268` |
-| 16 | KMeans | `all_audio` | `raw_zscore` | `16` | `0` | `1.000` | `0.225` | `0.024` | `0.542` |
-| 16 | GMM | `all_audio` | `raw_zscore` | `16` | `0` | `1.000` | `0.222` | `0.016` | `0.387` |
-| 16 | HDBSCAN | `rhythm_only` | `raw_zscore` | `15` | `1` | `0.433` | `0.186` | `0.002` | `0.819` |
-| 20 | KMeans | `all_audio` | `raw_zscore` | `20` | `0` | `1.000` | `0.234` | `0.020` | `0.400` |
-| 20 | GMM | `all_audio` | `raw_zscore` | `20` | `0` | `1.000` | `0.243` | `-0.010` | `0.532` |
-| 20 | HDBSCAN | `rhythm_only` | `raw_zscore` | `19` | `1` | `0.706` | `0.164` | `-0.087` | `0.884` |
+| 4 | KMeans | `timbre_pitch_rhythm` | `pca_per_group_2` | `4` | `0` | `1.000` | `0.113` | `0.188` | `0.972` |
+| 4 | GMM | `all_audio` | `raw_zscore` | `4` | `0` | `1.000` | `0.116` | `0.046` | `0.887` |
+| 4 | HDBSCAN | `spectral_pitch` | `raw_zscore` | `4` | `0` | `0.021` | `0.371` | `0.180` | `0.645` |
+| 8 | KMeans | `timbre_pitch_rhythm` | `raw_zscore` | `8` | `0` | `1.000` | `0.146` | `0.035` | `0.919` |
+| 8 | GMM | `all_audio` | `raw_zscore` | `8` | `0` | `1.000` | `0.152` | `0.037` | `0.440` |
+| 8 | HDBSCAN | `mfcc_only` | `pca_per_group_5` | `6` | `2` | `0.132` | `0.152` | `0.179` | `0.869` |
+| 12 | KMeans | `timbre_pitch` | `raw_zscore` | `12` | `0` | `1.000` | `0.165` | `0.026` | `0.612` |
+| 12 | GMM | `all_audio` | `raw_zscore` | `12` | `0` | `1.000` | `0.164` | `0.025` | `0.563` |
+| 12 | HDBSCAN | `rhythm_only` | `raw_zscore` | `13` | `1` | `0.518` | `0.110` | `-0.014` | `0.992` |
+| 16 | KMeans | `all_audio` | `raw_zscore` | `16` | `0` | `1.000` | `0.180` | `0.025` | `0.518` |
+| 16 | GMM | `all_audio` | `raw_zscore` | `16` | `0` | `1.000` | `0.179` | `0.020` | `0.395` |
+| 16 | HDBSCAN | `rhythm_only` | `pca_per_group_5` | `16` | `0` | `0.518` | `0.120` | `-0.027` | `0.697` |
+| 20 | KMeans | `all_audio` | `raw_zscore` | `20` | `0` | `1.000` | `0.195` | `0.019` | `0.415` |
+| 20 | GMM | `all_audio` | `raw_zscore` | `20` | `0` | `1.000` | `0.197` | `-0.009` | `0.581` |
+| 20 | HDBSCAN | `rhythm_only` | `pca_per_group_5` | `20` | `0` | `0.698` | `0.115` | `-0.171` | `0.934` |
 
-This table is crucial for honest interpretation.
+This table is essential for honest interpretation.
 
-It shows that some of the most spectacular HDBSCAN matched NMI values at low and medium targets are not
-full-collection solutions at all. They are partial-coverage solutions:
+It shows that the most spectacular HDBSCAN matched `NMI` values at low target counts are still not
+full-collection solutions. For example:
 
-- target `4`, `pitch_rhythm / raw_zscore`: coverage `0.020`
-- target `8`, `spectral_pitch / raw_zscore`: coverage `0.023`
-- target `12`, `spectral_pitch / raw_zscore`: coverage `0.023`
+- target `4`, `spectral_pitch / raw_zscore`: coverage `0.021`
+- target `8`, `mfcc_only / pca_per_group_5`: coverage `0.132`
 
-In other words:
+That means those rows are interesting density discoveries, but weak candidates for a practical
+full-dataset medium-granularity clustering.
 
-- those solutions discard roughly `98%` of the dataset as noise
+For the parametric methods, the raw matched-`NMI` story is now very close:
 
-That makes them very interesting as density discoveries, but weak as full-dataset medium-granularity
-clusterings.
+- GMM slightly exceeds KMeans at targets `4`, `8`, and `20`
+- KMeans slightly exceeds GMM at targets `12` and `16`
+- the gaps are small enough that geometry and stability still matter for the thesis conclusion
 
-This is one of the most important scientific outcomes of the whole study:
+## 10.6 Taxonomy-aware production recommendation ranking
 
-- if coverage is ignored, HDBSCAN appears to dominate matched semantic alignment at low and medium targets
-- once coverage is taken seriously, that dominance is much less convincing
+The downstream production rerun used the repository's recommended production profile:
 
-## 10.6 Direct KMeans vs GMM comparison on the full audio stack
+- feature subset: `spectral_plus_beat`
+- equalization: `pca_per_group`
+- prepared dimension: `30`
+- recommendation ranking depth: `K=10`
 
-Because `all_audio / raw_zscore` emerged as the strongest parametric semantic representation at higher
-matched targets, it is useful to compare KMeans and GMM directly on that exact feature space.
+Under the new multivector evaluation, the production ranking was:
 
-| Target | KMeans NMI | KMeans Silhouette | GMM NMI | GMM Silhouette |
-|---:|---:|---:|---:|---:|
-| 4 | `0.127` | `0.083` | `0.128` | `0.068` |
-| 8 | `0.170` | `0.041` | `0.170` | `0.020` |
-| 12 | `0.199` | `0.031` | `0.200` | `-0.002` |
-| 16 | `0.225` | `0.024` | `0.223` | `-0.007` |
-| 20 | `0.234` | `0.020` | `0.243` | `-0.010` |
+| Rank | Method | Clusters | PrimaryTagJaccard@10 | AllTagJaccard@10 | PrimaryTagHitRate@10 | AllTagHitRate@10 | CatalogCoverage | Subsample Median ARI |
+|---:|---|---:|---:|---:|---:|---:|---:|---:|
+| 1 | KMeans | `2` | `0.0620` | `0.0609` | `0.8171` | `0.8371` | `0.9853` | `0.9714` |
+| 2 | GMM | `4` | `0.0617` | `0.0604` | `0.8180` | `0.8372` | `0.9870` | `0.8120` |
+| 3 | HDBSCAN | `2` | `0.0596` | `0.0586` | `0.7784` | `0.7971` | `0.9395` | `0.4717` |
 
-Interpretation:
+This production rerun matters because it evaluates the user-facing recommendation behavior after the
+taxonomy change, not just the thesis benchmark grids.
 
-- at low target counts the two methods are very close
-- as target count grows, GMM slightly exceeds KMeans on NMI
-- but GMM loses geometric compactness faster and becomes negative on silhouette at `12+`
-- KMeans retains positive silhouette throughout
+The practical interpretation is:
 
-So the fairest reading is:
-
-- GMM can edge KMeans on semantic alignment in richer high-target parametric settings
-- KMeans remains more geometrically coherent in those same settings
+- KMeans and GMM are nearly tied semantically under the new primary-tag and all-tag overlap metrics
+- KMeans ranks first because it combines that near-tie semantic performance with much stronger stability
+  and cleaner geometry
+- GMM remains attractive because it provides soft assignments, but it still fails the explicit stability
+  gate in the production report
+- HDBSCAN is clearly weaker on the production profile because it collapses into one dominant cluster of
+  `5,198` tracks plus a tiny `7`-track cluster and `4.6%` noise
 
 ## 10.7 Geometry-focused matched leaders
 
-If the target is compact separation rather than label alignment, KMeans dominates the matched comparison
-from target `8` onward.
+If the target is compact separation rather than taxonomy alignment, KMeans dominates from target `8`
+upward.
 
 Global best matched silhouette at each target was:
 
-| Target | Best row |
-|---:|---|
-| 4 | `HDBSCAN + pitch_only + pca_per_group_5` with silhouette `0.371` but only approximate target match |
-| 8 | `KMeans + rhythm_only + pca_per_group_2`, silhouette `0.336` |
-| 12 | `KMeans + rhythm_only + pca_per_group_2`, silhouette `0.344` |
-| 16 | `KMeans + rhythm_only + pca_per_group_2`, silhouette `0.338` |
-| 20 | `KMeans + rhythm_only + pca_per_group_2`, silhouette `0.337` |
+| Target | Best row | Coverage | NMI |
+|---:|---|---:|---:|
+| 4 | `HDBSCAN + delta_mfcc_only + pca_per_group_5` with `3` clusters and silhouette `0.419` | `0.024` | `0.205` |
+| 8 | `KMeans + rhythm_only + pca_per_group_2`, silhouette `0.336` | `1.000` | `0.092` |
+| 12 | `KMeans + rhythm_only + pca_per_group_2`, silhouette `0.345` | `1.000` | `0.107` |
+| 16 | `KMeans + rhythm_only + pca_per_group_2`, silhouette `0.335` | `1.000` | `0.120` |
+| 20 | `KMeans + rhythm_only + pca_per_group_2`, silhouette `0.341` | `1.000` | `0.133` |
 
-This reveals a very strong rhythmic geometry effect:
+This reveals a strong rhythmic geometry effect that survives the taxonomy change:
 
 - `rhythm_only + pca_per_group_2` is repeatedly the cleanest medium-granularity partition for KMeans
 
-That does not mean rhythm-only is the universally best representation. It means:
-
-- the beat-strength family organizes the collection very cleanly for centroid-based clustering
+That does not make rhythm-only the universally best representation. It means the beat-strength family
+organizes this collection very cleanly for centroid-based clustering.
 
 ## 10.8 Computational cost
 
@@ -1340,114 +1390,106 @@ Full-run fit-time totals were:
 
 | Method | Fits | Total fit time (s) | Mean fit time (s) | Median fit time (s) | Max fit time (s) |
 |---|---:|---:|---:|---:|---:|
-| KMeans | `798` | `298.782` | `0.374` | `0.379` | `1.574` |
-| GMM | `1,596` | `798.562` | `0.500` | `0.109` | `15.137` |
-| HDBSCAN | `1,344` | `1,238.071` | `0.921` | `0.482` | `5.508` |
+| KMeans | `798` | `297.258` | `0.373` | `0.377` | `1.437` |
+| GMM | `1,596` | `815.482` | `0.511` | `0.113` | `18.251` |
+| HDBSCAN | `1,344` | `1,187.644` | `0.884` | `0.465` | `5.323` |
 
 Interpretation:
 
-- KMeans was the cheapest method on mean time
-- GMM had a low median fit time but a heavy tail due to expensive configurations
-- HDBSCAN was the most expensive method overall
-
-This matters because thesis-level "performance" should not be interpreted only as final NMI.
-
-Under a broader performance view:
-
-- KMeans is strong on quality/cost balance
-- GMM is a reasonable tradeoff when soft assignments are valuable
-- HDBSCAN earns its cost by discovering structures that the parametric methods do not, not by being cheap
+- KMeans remains the cheapest method on mean runtime
+- GMM still has a heavy tail because some covariance settings are expensive
+- HDBSCAN remains the most expensive method overall, but it also remains the only method that discovers
+  highly granular native structure
 
 ## 10.9 Representation and preprocessing patterns
 
-Several representation-level patterns were stable across the benchmark.
+Several representation-level patterns were stable in the taxonomy-aware rerun.
 
-### Pattern 1: HDBSCAN likes compact or low-dimensional structured spaces
+### Pattern 1: HDBSCAN still favors compact, coherent spaces
 
-The top raw-NMI representations for HDBSCAN were:
+The strongest HDBSCAN semantic rows are now concentrated in representations such as:
 
-- `delta2_mfcc_only / pca_per_group_5`
-- `delta2_mfcc_only / pca_per_group_2`
+- `pitch_rhythm / pca_per_group_2`
 - `rhythm_only / pca_per_group_2`
 - `delta_mfcc_only / pca_per_group_2`
-- `mfcc_only / pca_per_group_2`
 - `pitch_only / pca_per_group_2`
+- `mfcc_only / pca_per_group_2`
 
-This suggests that density discovery is strongest when the representation is:
+This again suggests that density discovery is strongest when the representation is focused and
+structurally coherent rather than maximally wide.
 
-- focused
-- low- to moderate-dimensional
-- structurally coherent
+### Pattern 2: `all_audio / raw_zscore` still helps raw matched semantic alignment for parametric models
 
-### Pattern 2: All-audio raw stacks help parametric semantic alignment at higher target counts
-
-The top KMeans and GMM NMI rows at higher matched targets were on:
+Even though the internal matched leaders moved toward more compact families, the best raw matched `NMI`
+rows for KMeans and GMM at higher targets still often come from:
 
 - `all_audio / raw_zscore`
 
-This means the richer mixed-family representation was helpful for parametric semantic alignment once the
- algorithms were forced to produce more than a handful of clusters.
+That means the wider mixed-family stack still helps parametric semantic alignment once the models are
+forced to produce many clusters.
 
-### Pattern 3: `pca_per_group_2` was especially strong for clean rhythmic organization
+### Pattern 3: `pca_per_group_2` remains especially strong for rhythmic organization
 
-The strongest matched-geometry KMeans results repeatedly used:
+Both the practical native HDBSCAN leader and the best matched-geometry KMeans rows repeatedly use:
 
 - `rhythm_only / pca_per_group_2`
 
-This suggests that light grouped compression sharpened the rhythmic structure rather than destroying it.
+So light grouped compression still appears to sharpen rhythmic structure rather than damage it.
 
-### Pattern 4: `pca_per_group_5` helped some fine-grained HDBSCAN timbral discovery, but with cost
+### Pattern 4: The taxonomy-aware rerun changes the headline representation story
 
-The strongest raw HDBSCAN NMI used:
+The old raw-label rerun gave the most dramatic headline to `delta2_mfcc_only`.
 
-- `delta2_mfcc_only / pca_per_group_5`
+The taxonomy-aware rerun changes that:
 
-But that came with:
-
-- `59.96%` noise
-- weaker stability than the practical `rhythm_only / pca_per_group_2` native leader
-
-So `pca_per_group_5` can help fine-grained density separation, but not always in the most practical way.
+- the highest raw `NMI` row is now `pitch_rhythm / pca_per_group_2`
+- the best practical native row is still `rhythm_only / pca_per_group_2`
+- compact harmonic-rhythmic and rhythmic spaces matter more than the old headline suggested
 
 ## 11. What Changed Relative to the Earlier Pilot-Shaped Story
 
-Removing the pilot did not merely make the study cleaner. It changed the empirical conclusions.
+Removing the pilot changed the thesis once. The taxonomy-aware rerun changes it again.
 
-### 11.1 The earlier `delta2_mfcc` HDBSCAN story was only part of the picture
+### 11.1 The old `delta2_mfcc` headline no longer survives
 
-The earlier pilot-based thesis flow emphasized:
+Earlier pilot-shaped and raw-label narratives emphasized:
 
 - `HDBSCAN + delta2_mfcc + grouped PCA`
 
-That phenomenon still exists in the pilot-free full benchmark:
+In the taxonomy-aware rerun, that is no longer the headline story:
 
-- `delta2_mfcc_only / pca_per_group_5` achieved the highest raw NMI overall
-- `delta2_mfcc_only / pca_per_group_2` remained a very strong practical density result
+- the highest raw `NMI` overall is now `HDBSCAN + pitch_rhythm + pca_per_group_2`
+- the strongest practical native leader is still `HDBSCAN + rhythm_only + pca_per_group_2`
+- `delta2_mfcc_only` remains relevant, but it is no longer the best single summary of the study
 
-But the widened unbiased search space also showed something the pilot-shaped path underemphasized:
+### 11.2 The medium-granularity story is now split between internal balance and raw semantic maxima
 
-- `rhythm_only / pca_per_group_2` is an even stronger practical native HDBSCAN solution
+Under the benchmark's internal matched-selection logic, the best balanced solutions come from relatively
+compact spaces such as:
 
-### 11.2 The parametric medium-granularity story changed too
+- `pitch_rhythm`
+- `pitch_only`
+- `rhythm_only`
+- `mfcc_only`
 
-The pilot-based flow had favored selected spectral/chroma/beat representations. In the new study, the
-strongest medium-granularity semantic parametric solutions came from:
+But when ranking purely by raw matched `NMI`, higher-target parametric rows still often come from:
 
 - `all_audio / raw_zscore`
 
-That means the thesis should not keep the earlier narrower representation story.
+That means the thesis should not claim that one representation family dominates unconditionally. The
+answer depends on whether the emphasis is balanced clustering, raw semantic alignment, or production
+recommendation behavior.
 
-### 11.3 Low-dimensional families mattered more than expected
+### 11.3 Taxonomy-aware evaluation changed the downstream recommendation story too
 
-The pilot-free benchmark showed unexpectedly strong behavior from:
+The new metadata contract introduced three important evaluation changes:
 
-- `rhythm_only`
-- `pitch_only`
-- `mfcc_only`
+- `79` downloaded songs with only `non_genre_*` mappings are now excluded from the MRS benchmark
+- the benchmark label space shrank to `187` taxonomy-backed primary genres
+- the production comparison now ranks methods by multivector primary-tag and all-tag overlap, not just by
+  exact single-label genre equality
 
-These would have been easy to underemphasize in a pilot-promoted process.
-
-That is exactly why the user was right to ask for the pilot to be removed from the thesis flow.
+That makes the downstream recommendation comparison more faithful to the user's intended genre taxonomy.
 
 ## 12. Final Answer to the Thesis Question
 
@@ -1456,130 +1498,158 @@ The thesis subject is:
 > A study and comparison of the performance of machine learning algorithms for clustering music tracks
 > based on their audio features.
 
-The most defensible answer, based only on this pilot-free benchmark, is the following.
+The most defensible answer, based on this pilot-free and taxonomy-aware rerun, is the following.
 
 ### 12.1 There is no single absolute best algorithm
 
-The benchmark does not support a simple statement like:
+The benchmark still does not support a simple statement like:
 
 - "KMeans is best"
 - "GMM is best"
 - "HDBSCAN is best"
 
-The result depends on what "performance" means.
+The result depends on what "performance" means and on how that performance is evaluated.
 
 ### 12.2 If performance means native fine-grained unsupervised discovery, HDBSCAN is strongest
 
-HDBSCAN is the only method that repeatedly discovered rich native fine-grained structure.
+HDBSCAN is still the only method that repeatedly discovers rich native fine-grained structure.
 
-The strongest practical native result was:
+The strongest practical native result is:
 
 - `HDBSCAN + rhythm_only + pca_per_group_2`
-- `576` clusters
-- `8.3%` noise
-- `silhouette=0.566`
-- `NMI=0.547`
-- `stability_ari=0.875`
+- `563` clusters
+- `8.5%` noise
+- `silhouette=0.569`
+- `NMI=0.453`
+- `stability_ari=0.887`
 
-The highest raw NMI overall was also HDBSCAN:
+The highest raw `NMI` overall is also HDBSCAN:
 
-- `HDBSCAN + delta2_mfcc_only + pca_per_group_5`
-- `NMI=0.588`
+- `HDBSCAN + pitch_rhythm + pca_per_group_2`
+- `NMI=0.483`
+- `46.0%` noise
 
-But that solution is not the best thesis headline because of its very high noise rate.
+But that row is not the best thesis headline because of its large noise fraction.
 
-### 12.3 If performance means balanced medium-granularity clustering, KMeans is strongest overall
+### 12.3 If performance means balanced medium-granularity clustering and production recommendation quality, KMeans is strongest overall
 
-Under matched-granularity comparison:
+Under matched-granularity comparison and under the downstream taxonomy-aware recommendation rerun:
 
-- KMeans was the most balanced method overall
-- it combined strong or near-strong NMI with consistently better silhouette and stability than GMM in
-  many target regimes
-- it avoided the extreme coverage problems seen in some HDBSCAN matched semantic leaders
+- KMeans is the most balanced method overall
+- it combines near-best semantic overlap with clearly stronger stability than GMM
+- it avoids the severe coverage and dominance problems seen in HDBSCAN on the production profile
 
-### 12.4 If performance means highest semantic alignment for high-target parametric models, GMM can win
+### 12.4 GMM is the closest competitor, especially when soft assignments are useful
 
-On `all_audio / raw_zscore` at `20` components:
+The thesis should still acknowledge that:
 
-- GMM reached `NMI=0.243`
-- KMeans reached `NMI=0.234`
+- GMM slightly exceeds KMeans on raw matched `NMI` at some targets
+- GMM is almost tied with KMeans in the production multivector tag-overlap metrics
+- GMM offers a legitimate probabilistic alternative when soft membership matters
 
-So the thesis should acknowledge that:
+But it should also state that:
 
-- GMM can slightly outperform KMeans on semantic alignment in some richer high-target parametric settings
+- GMM fails the explicit production stability gate in this rerun
 
 ### 12.5 Representation choice is as important as algorithm choice
 
-This may be the most important scientific conclusion of the whole study.
+This remains one of the strongest conclusions of the whole study.
 
-Different questions favored different representations:
+Different evaluation questions favor different representations:
 
-- HDBSCAN native discovery: `rhythm_only`, `delta2_mfcc_only`, `delta_mfcc_only`, `mfcc_only`
+- HDBSCAN native discovery: `rhythm_only`, `pitch_rhythm`, and other compact coherent spaces
 - matched geometry: `rhythm_only / pca_per_group_2`
-- higher-target parametric semantic alignment: `all_audio / raw_zscore`
+- high-target parametric semantic alignment: `all_audio / raw_zscore`
+- production recommendation rerun: `spectral_plus_beat / pca_per_group`
 
-That means the thesis should not frame the question as algorithm-only.
+So the thesis should not frame the problem as algorithm-only. It should frame it as:
 
-It should frame it as:
-
-- how algorithm performance changes with the audio representation and evaluation regime
+- how algorithm behavior changes with representation choice, coverage requirements, and evaluation regime
 
 ## 13. Why the New Conclusions Are More Defensible Than the Old Ones
 
-The new pilot-free conclusions are more defensible for four reasons.
+The new conclusions are more defensible for five reasons.
 
 1. No representation was promoted from a smaller exploratory screen.
-2. The full dataset was used directly for the main benchmark.
-3. Coverage and noise were explicitly considered when interpreting HDBSCAN.
-4. The report distinguishes raw score maxima from practical thesis conclusions.
+2. The full downloaded-audio dataset was benchmarked directly after a transparent taxonomy reassignment
+   step.
+3. Non-genre-only songs were excluded explicitly instead of being forced into misleading primary genres.
+4. Coverage and noise were reported and used in the interpretation of HDBSCAN.
+5. The downstream evaluation now uses multivector primary-tag and all-tag overlap metrics rather than
+   relying only on exact one-label agreement.
 
-That is a better research posture than reporting only the single most dramatic metric value.
+That is a stronger research posture than reporting only a single dramatic metric value on a noisier label
+space.
 
 ## 14. Limitations and Threats to Validity
 
-Even after removing the pilot, the study still has important limitations.
+Even after removing the pilot and curating the taxonomy, the study still has important limitations.
 
-### 14.1 Genre labels are imperfect
+### 14.1 The taxonomy is curated, not ground truth
 
-`419` genres is a large and potentially noisy label space. NMI against those labels is useful, but it is
+The merged taxonomy is a defensible engineering choice, but it is still a human-designed label system.
+Another curation scheme could move some songs between primary and secondary label sets.
+
+### 14.2 Even `187` primary genres remain imperfect
+
+The new label space is smaller and more coherent than the raw one, but `NMI` against those labels is still
 not the same thing as proving musical or perceptual correctness.
 
-### 14.2 Full-coverage and partial-coverage clusterings are inherently different
+### 14.3 Full-coverage and partial-coverage clusterings are inherently different
 
 HDBSCAN can leave points unlabeled as noise, while KMeans and GMM cannot. That makes direct metric
 comparison difficult unless coverage is reported alongside semantic scores.
 
-### 14.3 Internal criteria still influence native selections
+### 14.4 Internal criteria still influence native selections
 
 Native-mode conclusions depend on the internal selection rules used for each method. This is unavoidable,
 but it should be stated transparently.
 
-### 14.4 The study uses engineered audio descriptors, not deep embeddings
+### 14.5 The study uses engineered audio descriptors, not deep embeddings
 
 That is appropriate for the stated thesis topic, but the conclusions should not be generalized beyond this
 feature family without further work.
 
-### 14.5 No listening study was performed
+### 14.6 No listening study was performed
 
-The study is quantitative. It does not yet include human listening validation or playlist-quality
-judgment.
+The study is quantitative. It does not yet include human listening validation, playlist-quality judgment,
+or blind preference testing.
 
 ## 15. Reports Removed or Superseded
 
-Because the user explicitly asked that the thesis process stop depending on the pilot, earlier
-pilot-shaped thesis reports were treated as superseded material.
+Because the user explicitly asked for the thesis benchmark to stop depending on the pilot and then to move
+to the merged taxonomy, two earlier narratives are now superseded as primary references:
 
-The new report in this file is intended to replace them as the main thesis reference.
+- the earlier pilot-shaped thesis reports
+- the March 17 raw-genre pilot-free benchmark bundles
+
+They may still be useful for audit history, but the taxonomy-aware update in this file is the current
+primary thesis reference.
 
 ## 16. Artifact Inventory
 
-### 16.1 Main code artifact
+### 16.1 Main code artifacts
 
+- `scripts/utilities/build_merged_genre_dataset.py`
+- `src/utils/genre_taxonomy.py`
 - `scripts/analysis/thesis_clustering_benchmark.py`
+- `scripts/analysis/evaluate_clustering.py`
 
-### 16.2 Main output bundle
+### 16.2 Derived taxonomy dataset
 
-- `output/metrics/thesis_benchmark_pilotless_full_2026-03-17`
+- `data/songs_with_merged_genres.csv`
+
+Important added columns in that file include:
+
+- `mapped_primary_genres`
+- `mapped_secondary_tags`
+- `mapped_all_tags`
+- `include_in_mrs`
+- `mrs_exclusion_reason`
+
+### 16.3 Main thesis benchmark bundle
+
+- `output/metrics/thesis_benchmark_taxonomy_full_2026-03-19`
 
 Important files inside that bundle:
 
@@ -1594,40 +1664,46 @@ Important files inside that bundle:
 - `dataset_summary.json`
 - `benchmark_report.md`
 
-### 16.3 Smoke-validation bundle
+### 16.4 Production clustering and evaluation bundle
 
-- `output/metrics/thesis_benchmark_pilotless_smoke_2026-03-17`
+- `output/experiment_runs_taxonomy/run_20260319_140333Z/recommended_production`
 
-### 16.4 Revalidation bundle
+Important files inside that bundle:
 
-- `output/metrics/thesis_benchmark_pilotless_revalidation_2026-03-17`
-
-This bundle exists so the main thesis result is not tied to a single benchmark execution.
+- `clustering_results/audio_clustering_results_kmeans.csv`
+- `clustering_results/audio_clustering_results_gmm.csv`
+- `clustering_results/audio_clustering_results_hdbscan.csv`
+- `metrics/recommended_production_comparison.csv`
+- `metrics/recommended_production_comparison_report.md`
+- `metrics/recommended_production_summary.json`
 
 ## 17. Sources Used
 
 ### 17.1 Local project sources
 
-These were the direct local sources used for the new thesis reconstruction:
+These were the direct local sources used for this taxonomy-aware thesis reconstruction:
 
+- `data/acoustically_coherent_merged_genres_corrected.csv`
+- `data/songs_with_merged_genres.csv`
+- `scripts/utilities/build_merged_genre_dataset.py`
+- `src/utils/genre_taxonomy.py`
+- `src/utils/song_metadata.py`
+- `src/utils/genre_mapper.py`
 - `scripts/analysis/thesis_clustering_benchmark.py`
-- `output/metrics/thesis_benchmark_pilotless_full_2026-03-17/representation_catalog.csv`
-- `output/metrics/thesis_benchmark_pilotless_full_2026-03-17/full_grid_results.csv`
-- `output/metrics/thesis_benchmark_pilotless_full_2026-03-17/native_best_results.csv`
-- `output/metrics/thesis_benchmark_pilotless_full_2026-03-17/matched_granularity_results.csv`
-- `output/metrics/thesis_benchmark_pilotless_full_2026-03-17/global_native_leaders.csv`
-- `output/metrics/thesis_benchmark_pilotless_full_2026-03-17/global_matched_leaders.csv`
-- `output/metrics/thesis_benchmark_pilotless_full_2026-03-17/feature_group_variance_summary.csv`
-- `output/metrics/thesis_benchmark_pilotless_full_2026-03-17/feature_group_correlation_summary.csv`
-- `output/metrics/thesis_benchmark_pilotless_full_2026-03-17/dataset_summary.json`
-- `output/metrics/thesis_benchmark_pilotless_full_2026-03-17/benchmark_report.md`
-- `output/metrics/thesis_benchmark_pilotless_smoke_2026-03-17/benchmark_report.md`
-- `output/metrics/thesis_benchmark_pilotless_revalidation_2026-03-17/full_grid_results.csv`
-- `output/metrics/thesis_benchmark_pilotless_revalidation_2026-03-17/native_best_results.csv`
-- `output/metrics/thesis_benchmark_pilotless_revalidation_2026-03-17/matched_granularity_results.csv`
-- `output/metrics/thesis_benchmark_pilotless_revalidation_2026-03-17/global_native_leaders.csv`
-- `output/metrics/thesis_benchmark_pilotless_revalidation_2026-03-17/global_matched_leaders.csv`
-- `output/metrics/thesis_benchmark_pilotless_revalidation_2026-03-17/benchmark_report.md`
+- `scripts/analysis/evaluate_clustering.py`
+- `output/metrics/thesis_benchmark_taxonomy_full_2026-03-19/representation_catalog.csv`
+- `output/metrics/thesis_benchmark_taxonomy_full_2026-03-19/full_grid_results.csv`
+- `output/metrics/thesis_benchmark_taxonomy_full_2026-03-19/native_best_results.csv`
+- `output/metrics/thesis_benchmark_taxonomy_full_2026-03-19/matched_granularity_results.csv`
+- `output/metrics/thesis_benchmark_taxonomy_full_2026-03-19/global_native_leaders.csv`
+- `output/metrics/thesis_benchmark_taxonomy_full_2026-03-19/global_matched_leaders.csv`
+- `output/metrics/thesis_benchmark_taxonomy_full_2026-03-19/feature_group_variance_summary.csv`
+- `output/metrics/thesis_benchmark_taxonomy_full_2026-03-19/feature_group_correlation_summary.csv`
+- `output/metrics/thesis_benchmark_taxonomy_full_2026-03-19/dataset_summary.json`
+- `output/metrics/thesis_benchmark_taxonomy_full_2026-03-19/benchmark_report.md`
+- `output/experiment_runs_taxonomy/run_20260319_140333Z/recommended_production/metrics/recommended_production_comparison.csv`
+- `output/experiment_runs_taxonomy/run_20260319_140333Z/recommended_production/metrics/recommended_production_comparison_report.md`
+- `output/experiment_runs_taxonomy/run_20260319_140333Z/recommended_production/metrics/recommended_production_summary.json`
 
 ### 17.2 External scientific sources
 
@@ -1673,16 +1749,17 @@ Clustering algorithms and validation:
 
 ## 18. Final Bottom Line
 
-The pilot-free thesis reconstruction changed the empirical story in a meaningful way, which confirms that
-removing the pilot was the right methodological decision.
+The taxonomy-aware pilot-free rerun changed the empirical story again, and it did so in a more defensible
+way than either the earlier pilot-shaped flow or the raw-genre pilot-free rerun.
 
 The strongest concise conclusion I would now stand behind is:
 
 - HDBSCAN is the strongest method for native fine-grained unsupervised discovery
-- KMeans is the strongest balanced method for matched medium-granularity clustering
-- GMM is a competitive soft-clustering alternative and slightly stronger than KMeans on some high-target
-  semantic comparisons
-- representation choice is at least as important as algorithm choice
-- the earlier pilot should not be used as the main thesis benchmark anymore
+- KMeans is the strongest balanced method for matched medium-granularity clustering and for the current
+  production recommendation profile
+- GMM is a very close second and a legitimate soft-clustering alternative, but it still has stability
+  concerns
+- secondary `non_genre_*` tags should remain contextual descriptors rather than stand-alone primary genres
+- representation choice and evaluation regime matter at least as much as algorithm choice
 
-That is the thesis answer supported by the new pilot-free benchmark.
+That is the thesis answer supported by the taxonomy-aware benchmark and production rerun.

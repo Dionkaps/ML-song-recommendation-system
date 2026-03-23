@@ -1,3 +1,4 @@
+import json
 import re
 import unicodedata
 from pathlib import Path
@@ -111,10 +112,16 @@ def _coerce_bool(value: Any) -> bool:
     return text in {"1", "true", "yes", "y", "t"}
 
 
+def _nonempty_string_mask(series: pd.Series) -> pd.Series:
+    return series.fillna("").astype(str).str.strip().ne("")
+
+
 def ensure_unified_songs_schema(frame: pd.DataFrame) -> pd.DataFrame:
     """Normalize a songs dataframe to the canonical unified schema."""
 
     df = frame.copy()
+    had_primary_genre_column = "primary_genre" in df.columns
+    had_genre_count_column = "genre_count" in df.columns
 
     rename_map: Dict[str, str] = {}
     if "track_id" in df.columns and "msd_track_id" not in df.columns:
@@ -141,22 +148,39 @@ def ensure_unified_songs_schema(frame: pd.DataFrame) -> pd.DataFrame:
     for column in _NUMERIC_COLUMNS:
         df[column] = pd.to_numeric(df[column], errors="coerce")
 
-    missing_base = df["audio_basename"].eq("")
-    df.loc[missing_base, "audio_basename"] = df.loc[missing_base, "filename"].apply(
-        lambda value: Path(value).stem if str(value).strip() else ""
+    filename_values = df["filename"].where(df["filename"].notna(), "").astype(str).str.strip()
+    has_filename = filename_values.ne("")
+    df.loc[has_filename, "audio_basename"] = filename_values.loc[has_filename].apply(
+        lambda value: Path(value).stem
     )
-
-    missing_ext = df["audio_extension"].eq("")
-    df.loc[missing_ext, "audio_extension"] = df.loc[missing_ext, "filename"].apply(
-        lambda value: Path(value).suffix.lower() if str(value).strip() else ""
+    df.loc[has_filename, "audio_extension"] = filename_values.loc[has_filename].apply(
+        lambda value: Path(value).suffix.lower()
     )
 
     df["has_audio"] = df["has_audio"].apply(_coerce_bool)
 
-    df["primary_genre"] = df["genre"].apply(
-        lambda value: _genre_tokens(value)[0] if _genre_tokens(value) else ""
-    )
-    df["genre_count"] = df["genre"].apply(lambda value: len(_genre_tokens(value))).astype(int)
+    if had_primary_genre_column:
+        df["primary_genre"] = (
+            df["primary_genre"]
+            .where(df["primary_genre"].notna(), "")
+            .astype(str)
+            .str.strip()
+        )
+    else:
+        df["primary_genre"] = df["genre"].apply(
+            lambda value: _genre_tokens(value)[0] if _genre_tokens(value) else ""
+        )
+
+    derived_genre_counts = df["genre"].apply(lambda value: len(_genre_tokens(value)))
+    if had_genre_count_column:
+        parsed_counts = pd.to_numeric(df["genre_count"], errors="coerce")
+        df["genre_count"] = (
+            parsed_counts.where(parsed_counts.notna(), derived_genre_counts)
+            .fillna(0)
+            .astype(int)
+        )
+    else:
+        df["genre_count"] = derived_genre_counts.astype(int)
 
     ordered = list(UNIFIED_SONG_COLUMNS)
     extras = [column for column in df.columns if column not in ordered]
@@ -267,6 +291,68 @@ def load_legacy_downloaded_songs(csv_path: str) -> pd.DataFrame:
         )
     normalized["audio_basename"] = normalized["filename"].apply(lambda value: Path(value).stem)
     return normalized
+
+
+def load_checkpoint_download_rows(json_path: str) -> pd.DataFrame:
+    """Load downloaded-song metadata from the richer checkpoint JSON when available."""
+
+    path = Path(json_path)
+    columns = [
+        "deezer_artist",
+        "deezer_title",
+        "filename",
+        "genre",
+        "audio_basename",
+        "msd_track_id",
+        "msd_artist",
+        "msd_title",
+    ]
+    if not path.exists():
+        return pd.DataFrame(columns=columns)
+
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return pd.DataFrame(columns=columns)
+
+    rows: List[Dict[str, str]] = []
+    for item in payload.get("downloaded_songs", []):
+        if not isinstance(item, dict):
+            continue
+        filename = str(item.get("filename", "") or "").strip()
+        audio_basename = str(item.get("audio_basename", "") or "").strip()
+        if not audio_basename and filename:
+            audio_basename = Path(filename).stem
+        rows.append(
+            {
+                "deezer_artist": str(item.get("deezer_artist", item.get("artist", "")) or "").strip(),
+                "deezer_title": str(item.get("deezer_title", item.get("title", "")) or "").strip(),
+                "filename": filename,
+                "genre": str(item.get("genre", "") or "").strip(),
+                "audio_basename": audio_basename,
+                "msd_track_id": str(item.get("msd_track_id", "") or "").strip(),
+                "msd_artist": str(item.get("msd_artist", "") or "").strip(),
+                "msd_title": str(item.get("msd_title", "") or "").strip(),
+            }
+        )
+
+    checkpoint_rows = pd.DataFrame(rows, columns=columns)
+    if checkpoint_rows.empty:
+        return checkpoint_rows
+
+    checkpoint_rows = checkpoint_rows[
+        checkpoint_rows["audio_basename"].astype(str).str.strip().ne("")
+    ].copy()
+    checkpoint_rows["_has_track_id"] = checkpoint_rows["msd_track_id"].astype(str).str.strip().ne("")
+    checkpoint_rows["_has_genre"] = checkpoint_rows["genre"].astype(str).str.strip().ne("")
+    checkpoint_rows = checkpoint_rows.sort_values(
+        by=["_has_track_id", "_has_genre", "audio_basename", "filename"],
+        ascending=[False, False, True, True],
+        kind="stable",
+    )
+    checkpoint_rows = checkpoint_rows.drop_duplicates(subset=["audio_basename"], keep="first")
+    checkpoint_rows = checkpoint_rows.drop(columns=["_has_track_id", "_has_genre"])
+    return checkpoint_rows.reset_index(drop=True)
 
 
 def load_legacy_match_rows(csv_path: str) -> pd.DataFrame:
@@ -513,6 +599,7 @@ def build_unified_songs_dataframe(
         if (data_root / "songs_data_with_genre.csv").exists()
         else backup_root / "songs_data_with_genre.csv"
     )
+    checkpoint_path = project_root_path / "download_checkpoint_with_genre.json"
     matches_path = (
         data_root / "msd_matches.csv"
         if (data_root / "msd_matches.csv").exists()
@@ -531,6 +618,7 @@ def build_unified_songs_dataframe(
             columns=["deezer_artist", "deezer_title", "filename", "genre", "audio_basename"]
         )
     )
+    checkpoint_downloaded = load_checkpoint_download_rows(str(checkpoint_path))
     matches = (
         load_legacy_match_rows(str(matches_path))
         if matches_path.exists()
@@ -564,6 +652,107 @@ def build_unified_songs_dataframe(
         )
     else:
         downloaded["resolved_track_id"] = []
+
+    if not checkpoint_downloaded.empty:
+        checkpoint_enrichment = checkpoint_downloaded.rename(
+            columns={
+                "deezer_artist": "checkpoint_deezer_artist",
+                "deezer_title": "checkpoint_deezer_title",
+                "filename": "checkpoint_filename",
+                "genre": "checkpoint_genre",
+                "msd_track_id": "checkpoint_track_id",
+                "msd_artist": "checkpoint_msd_artist",
+                "msd_title": "checkpoint_msd_title",
+            }
+        )
+        if downloaded.empty:
+            downloaded = checkpoint_enrichment.rename(
+                columns={
+                    "checkpoint_deezer_artist": "deezer_artist",
+                    "checkpoint_deezer_title": "deezer_title",
+                    "checkpoint_filename": "filename",
+                    "checkpoint_genre": "genre",
+                    "checkpoint_track_id": "resolved_track_id",
+                    "checkpoint_msd_artist": "msd_artist",
+                    "checkpoint_msd_title": "msd_title",
+                }
+            ).copy()
+            downloaded["msd_track_id"] = downloaded["resolved_track_id"]
+            downloaded["match_type"] = ""
+            downloaded["match_score"] = np.nan
+            downloaded["mapped_track_id"] = ""
+        else:
+            downloaded = downloaded.merge(
+                checkpoint_enrichment,
+                on="audio_basename",
+                how="left",
+            )
+
+            for column, checkpoint_column in (
+                ("deezer_artist", "checkpoint_deezer_artist"),
+                ("deezer_title", "checkpoint_deezer_title"),
+                ("filename", "checkpoint_filename"),
+                ("genre", "checkpoint_genre"),
+                ("msd_artist", "checkpoint_msd_artist"),
+                ("msd_title", "checkpoint_msd_title"),
+            ):
+                downloaded[column] = downloaded[column].where(
+                    _nonempty_string_mask(downloaded[column]),
+                    downloaded[checkpoint_column],
+                )
+
+            downloaded["resolved_track_id"] = downloaded["resolved_track_id"].where(
+                _nonempty_string_mask(downloaded["resolved_track_id"]),
+                downloaded["checkpoint_track_id"],
+            )
+            downloaded["msd_track_id"] = downloaded["msd_track_id"].where(
+                _nonempty_string_mask(downloaded["msd_track_id"]),
+                downloaded["checkpoint_track_id"],
+            )
+
+            for column in (
+                "checkpoint_deezer_artist",
+                "checkpoint_deezer_title",
+                "checkpoint_filename",
+                "checkpoint_genre",
+                "checkpoint_track_id",
+                "checkpoint_msd_artist",
+                "checkpoint_msd_title",
+            ):
+                if column in downloaded.columns:
+                    downloaded = downloaded.drop(columns=[column])
+
+            missing_checkpoint_rows = checkpoint_downloaded[
+                ~checkpoint_downloaded["audio_basename"].isin(downloaded["audio_basename"])
+            ].copy()
+            if not missing_checkpoint_rows.empty:
+                missing_checkpoint_rows["msd_track_id"] = missing_checkpoint_rows["msd_track_id"]
+                missing_checkpoint_rows["match_type"] = ""
+                missing_checkpoint_rows["match_score"] = np.nan
+                missing_checkpoint_rows["mapped_track_id"] = ""
+                missing_checkpoint_rows["resolved_track_id"] = missing_checkpoint_rows["msd_track_id"]
+                downloaded = pd.concat([downloaded, missing_checkpoint_rows], ignore_index=True, sort=False)
+
+    downloaded_fallback_by_stem: Dict[str, Dict[str, str]] = {}
+    if not downloaded.empty:
+        downloaded_fallback = downloaded.copy()
+        downloaded_fallback["_has_genre"] = (
+            downloaded_fallback["genre"].astype(str).str.strip().ne("")
+        )
+        downloaded_fallback = downloaded_fallback.sort_values(
+            by=["_has_genre"],
+            ascending=[False],
+            kind="stable",
+        )
+        for _, row in downloaded_fallback.iterrows():
+            stem = str(row.get("audio_basename", "") or "").strip()
+            if not stem or stem in downloaded_fallback_by_stem:
+                continue
+            downloaded_fallback_by_stem[stem] = {
+                "deezer_artist": str(row.get("deezer_artist", "") or "").strip(),
+                "deezer_title": str(row.get("deezer_title", "") or "").strip(),
+                "genre": str(row.get("genre", "") or "").strip(),
+            }
 
     audio_rows = load_audio_library_rows(str(audio_root))
     audio_by_stem = {
@@ -659,7 +848,27 @@ def build_unified_songs_dataframe(
             continue
 
         artist_name, title_name = split_artist_title(audio_basename)
+        downloaded_fallback = downloaded_fallback_by_stem.get(audio_basename, {})
         cached_genre = cached_genre_map.get(audio_basename, "")
+        fallback_genre = first_nonempty(downloaded_fallback.get("genre"), cached_genre)
+        fallback_artist = first_nonempty(
+            downloaded_fallback.get("deezer_artist"),
+            artist_name,
+        )
+        fallback_title = first_nonempty(
+            downloaded_fallback.get("deezer_title"),
+            title_name,
+        )
+        fallback_genre_source = (
+            "legacy_download"
+            if str(downloaded_fallback.get("genre", "")).strip()
+            else ("genre_cache" if cached_genre else "")
+        )
+        fallback_audio_match_source = (
+            "legacy_download_fallback"
+            if downloaded_fallback
+            else "genre_cache_only"
+        )
         track_id = mapping_by_stem.get(audio_basename, "")
         row_idx = track_id_lookup.get(track_id) if track_id else None
         if row_idx is not None and (
@@ -674,9 +883,9 @@ def build_unified_songs_dataframe(
                 audio_extension=audio_info["audio_extension"],
                 deezer_artist=artist_name,
                 deezer_title=title_name,
-                genre=cached_genre,
+                genre=fallback_genre,
                 metadata_origin="msd_catalog+audio_mapping",
-                genre_source="genre_cache" if cached_genre else "",
+                genre_source=fallback_genre_source,
                 audio_match_source="legacy_audio_mapping",
             )
             assigned_audio_stems.add(audio_basename)
@@ -697,9 +906,9 @@ def build_unified_songs_dataframe(
                 audio_extension=audio_info["audio_extension"],
                 deezer_artist=artist_name,
                 deezer_title=title_name,
-                genre=cached_genre,
+                genre=fallback_genre,
                 metadata_origin="msd_catalog+normalized_audio",
-                genre_source="genre_cache" if cached_genre else "",
+                genre_source=fallback_genre_source,
                 audio_match_source="normalized_audio_to_msd",
             )
             assigned_audio_stems.add(audio_basename)
@@ -711,13 +920,13 @@ def build_unified_songs_dataframe(
                 "msd_track_id": "",
                 "msd_artist": "",
                 "msd_title": "",
-                "deezer_artist": artist_name,
-                "deezer_title": title_name,
+                "deezer_artist": fallback_artist,
+                "deezer_title": fallback_title,
                 "filename": audio_info["filename"],
                 "audio_basename": audio_basename,
                 "audio_extension": audio_info["audio_extension"],
                 "has_audio": True,
-                "genre": cached_genre,
+                "genre": fallback_genre,
                 "key": np.nan,
                 "mode": np.nan,
                 "loudness": np.nan,
@@ -725,8 +934,8 @@ def build_unified_songs_dataframe(
                 "key_confidence": np.nan,
                 "mode_confidence": np.nan,
                 "metadata_origin": "audio_only_cache",
-                "genre_source": "genre_cache" if cached_genre else "",
-                "audio_match_source": "genre_cache_only",
+                "genre_source": fallback_genre_source,
+                "audio_match_source": fallback_audio_match_source,
             }
         )
         assigned_audio_stems.add(audio_basename)
@@ -828,7 +1037,26 @@ def build_audio_metadata_frame(
                 "MSDTrackID": first_nonempty(row.get("msd_track_id")),
                 "GenreList": first_nonempty(row.get("genre")),
                 "PrimaryGenre": first_nonempty(row.get("primary_genre"), "unknown"),
-                "HasAudio": bool(row.get("has_audio")),
+                "PrimaryGenres": first_nonempty(
+                    row.get("mapped_primary_genres"),
+                    row.get("genre"),
+                ),
+                "SecondaryTags": first_nonempty(row.get("mapped_secondary_tags")),
+                "AllGenreTags": first_nonempty(
+                    row.get("mapped_all_tags"),
+                    row.get("genre"),
+                ),
+                "OriginalGenreList": first_nonempty(
+                    row.get("original_genre"),
+                    row.get("genre"),
+                ),
+                "OriginalPrimaryGenre": first_nonempty(
+                    row.get("original_primary_genre"),
+                    row.get("primary_genre"),
+                    "unknown",
+                ),
+                "IncludeInMRS": _coerce_bool(row.get("include_in_mrs", True)),
+                "HasAudio": _coerce_bool(row.get("has_audio")),
             }
             for key in key_candidates:
                 if key and key not in lookup:
@@ -847,6 +1075,12 @@ def build_audio_metadata_frame(
                 "MSDTrackID": "",
                 "GenreList": "",
                 "PrimaryGenre": "unknown",
+                "PrimaryGenres": "",
+                "SecondaryTags": "",
+                "AllGenreTags": "",
+                "OriginalGenreList": "",
+                "OriginalPrimaryGenre": "unknown",
+                "IncludeInMRS": False,
                 "HasAudio": False,
             }
         rows.append(metadata)

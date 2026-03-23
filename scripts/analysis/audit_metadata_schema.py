@@ -70,8 +70,9 @@ def _write_markdown_summary(
         f"- Audio-backed rows: {summary['audio_backed_rows']}",
         f"- Audio-backed rows with MSD track id: {summary['audio_rows_with_msd_track_id']}",
         f"- Audio-backed rows with numeric MSD features: {summary['audio_rows_with_numeric_msd_features']}",
-        f"- Current audio library size: {summary['current_audio_files']}",
-        f"- Audio coverage gap: {summary['audio_library_minus_unified_audio_rows']}",
+        f"- Current audio library size (unique basenames): {summary['current_audio_basenames']}",
+        f"- Raw audio files on disk: {summary['current_audio_files']}",
+        f"- Audio coverage gap (unique basenames): {summary['audio_basename_gap']}",
         f"- Primary genres in audio-backed subset: {summary['audio_primary_genre_unique_count']}",
         f"- MSD metadata policy: {summary['msd_metadata_policy']}",
         "",
@@ -125,6 +126,7 @@ def main() -> None:
         for path in (PROJECT_ROOT / args.audio_dir).iterdir()
         if path.is_file() and path.suffix.lower() in {".wav", ".mp3", ".flac", ".m4a"}
     ]
+    audio_basenames = {path.stem for path in audio_files}
 
     audio_rows = unified[unified["has_audio"]].copy()
     audio_rows["PrimaryGenre"] = audio_rows["primary_genre"].replace("", "unknown")
@@ -161,7 +163,8 @@ def main() -> None:
         "unified_rows": int(len(unified)),
         "audio_backed_rows": int(audio_rows.shape[0]),
         "current_audio_files": int(len(audio_files)),
-        "audio_library_minus_unified_audio_rows": int(len(audio_files) - audio_rows.shape[0]),
+        "current_audio_basenames": int(len(audio_basenames)),
+        "audio_basename_gap": int(len(audio_basenames) - audio_rows.shape[0]),
         "unified_rows_with_msd_track_id": int(unified["msd_track_id"].astype(str).str.strip().ne("").sum()),
         "audio_rows_with_msd_track_id": int(
             (audio_rows["msd_track_id"].astype(str).str.strip().ne("")).sum()

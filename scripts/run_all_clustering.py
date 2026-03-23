@@ -23,6 +23,7 @@ from src.clustering.gmm import run_gmm_clustering  # noqa: E402
 from src.clustering.hdbscan import run_hdbscan_clustering  # noqa: E402
 from src.clustering.kmeans import run_kmeans_clustering  # noqa: E402
 from src.clustering.vade import run_vade_clustering  # noqa: E402
+from src.ui.ui_snapshot import publish_profile_ui_snapshot  # noqa: E402
 
 
 METHOD_CHOICES = ("kmeans", "gmm", "hdbscan", "vade")
@@ -76,6 +77,14 @@ def _parse_args() -> argparse.Namespace:
         type=int,
         default=1,
         help="Parallel jobs passed through to evaluation stability checks.",
+    )
+    parser.add_argument(
+        "--publish-ui-snapshot",
+        action="store_true",
+        help=(
+            "Publish the recommended-production UI bundle into the stable "
+            "output/ui/latest_benchmark_snapshot location."
+        ),
     )
     return parser.parse_args()
 
@@ -297,6 +306,21 @@ def main() -> None:
             Path(profile_manifest["profile_manifest_path"]),
             profile_manifest,
         )
+        if (
+            args.publish_ui_snapshot
+            and profile_id == RECOMMENDED_PRODUCTION_PROFILE_ID
+        ):
+            ui_snapshot_manifest = publish_profile_ui_snapshot(
+                profile_root=profile_root,
+                profile_manifest=profile_manifest,
+            )
+            profile_manifest["ui_snapshot_manifest_path"] = str(
+                Path(ui_snapshot_manifest["snapshot_root"]) / "ui_bundle_manifest.json"
+            )
+            profile_manifest_path = _write_json(
+                Path(profile_manifest["profile_manifest_path"]),
+                profile_manifest,
+            )
 
         run_manifest["profiles"][profile_id] = profile_manifest
 

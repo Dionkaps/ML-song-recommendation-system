@@ -1,3 +1,4 @@
+import argparse
 import json
 import os
 import sys
@@ -22,7 +23,6 @@ from sklearn.metrics import silhouette_score
 # -----------------------------------------------------------------------------
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from config import feature_vars as fv  # noqa: E402
-from src.ui.modern_ui import launch_ui  # noqa: E402
 from src.clustering.kmeans import (  # noqa: E402
     compute_cluster_range,
     compute_visualization_coords,
@@ -698,6 +698,11 @@ def run_vade_clustering(
             "Filename": metadata_frame["Filename"].astype(str).to_numpy(),
             "MSDTrackID": metadata_frame["MSDTrackID"].astype(str).to_numpy(),
             "GenreList": metadata_frame["GenreList"].astype(str).to_numpy(),
+            "PrimaryGenres": metadata_frame["PrimaryGenres"].astype(str).to_numpy(),
+            "SecondaryTags": metadata_frame["SecondaryTags"].astype(str).to_numpy(),
+            "AllGenreTags": metadata_frame["AllGenreTags"].astype(str).to_numpy(),
+            "OriginalGenreList": metadata_frame["OriginalGenreList"].astype(str).to_numpy(),
+            "OriginalPrimaryGenre": metadata_frame["OriginalPrimaryGenre"].astype(str).to_numpy(),
             "Genre": genres,
             "Cluster": labels,
             "Confidence": confidence,
@@ -830,7 +835,20 @@ def run_vade_clustering(
 # -----------------------------------------------------------------------------
 # CLI
 # -----------------------------------------------------------------------------
+def _parse_cli_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Run VaDE clustering and optionally launch the interactive UI."
+    )
+    parser.add_argument(
+        "--ui",
+        action="store_true",
+        help="Launch the interactive clustering UI after clustering finishes.",
+    )
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
+    args = _parse_cli_args()
     DF, COORDS, LABELS = run_vade_clustering(
         audio_dir="audio_files",
         results_dir="output/features",
@@ -844,11 +862,19 @@ if __name__ == "__main__":
         include_genre=fv.include_genre,
     )
 
-    launch_ui(
-        DF,
-        COORDS,
-        LABELS,
-        audio_dir="audio_files",
-        clustering_method="VaDE",
-        retrieval_method_id="vade",
-    )
+    if args.ui:
+        from src.ui.modern_ui import launch_ui  # noqa: E402
+
+        launch_ui(
+            DF,
+            COORDS,
+            LABELS,
+            audio_dir="audio_files",
+            clustering_method="VaDE",
+            retrieval_method_id="vade",
+        )
+    else:
+        print(
+            "Skipping interactive clustering UI. Run 'python src/ui/modern_ui.py' "
+            "to open the latest benchmark-linked UI snapshot."
+        )

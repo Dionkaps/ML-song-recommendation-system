@@ -127,6 +127,14 @@ python run_pipeline.py --clustering-method vade
 python run_pipeline.py --skip extract plot
 ```
 
+### 5. Open The UI
+```bash
+python scripts/run_ui.py
+```
+
+This opens the recommendation UI from the latest benchmark-linked `recommended_production` snapshot instead of launching automatically after each clustering script.
+The benchmark-backed UI bundle is staged in `output/ui/latest_benchmark_snapshot/`.
+
 ## Features
 
 - **Multiple Clustering Algorithms**: K-Means, GMM, HDBSCAN, and VaDE (deep learning)
@@ -193,6 +201,9 @@ python src/clustering/hdbscan.py
 
 # VaDE (requires PyTorch)
 python src/clustering/vade.py
+
+# Open the UI from the latest benchmark-linked snapshot
+python scripts/run_ui.py
 ```
 
 ### Visualize Features
