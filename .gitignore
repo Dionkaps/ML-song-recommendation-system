@@ -10,6 +10,9 @@ genres_original/
 millionsongsubset_extracted/
 millionsongsubset.tar.gz
 
+# Private documentation
+docs/
+
 # Output directories (generated files)
 results/
 processed_results/
@@ -41,6 +44,8 @@ ENV/
 
 # Model files and checkpoints (large files)
 encodecmae/
+third_party/encodecmae_src/
+third_party/musicnn_keras_src/
 musicnn_keras/keras_checkpoints/
 *.h5
 *.pt
