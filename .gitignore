@@ -1,79 +1,47 @@
-# Audio files (too large for git)
-audio_files/
-audio_files_1/
-audio_files_2/
-audio_files_all/
-src/data_collection/audio_files/
-genres_original/
-
-# Dataset files
-millionsongsubset_extracted/
-millionsongsubset.tar.gz
-
-# Private documentation
-docs/
-
-# Output directories (generated files)
-results/
-processed_results/
-output/
-output/embeddings/
-output/features/
-output/metrics/
-output/spectral/
-
-# Python cache
+# Python cache artifacts
 __pycache__/
 *.py[cod]
-*$py.class
-*.so
 
-# Virtual environments
+# Common local environment folders
 .venv/
-.venv-encodecmae/
-.venv-musicnn/
 venv/
-env/
-ENV/
+.env
 
-# IDE settings
-.vscode/
-.idea/
-*.swp
-*.swo
+# Large source datasets
+/millionsongsubset/
 
-# Model files and checkpoints (large files)
-encodecmae/
-third_party/encodecmae_src/
-third_party/musicnn_keras_src/
-musicnn_keras/keras_checkpoints/
+# Generated workspace outputs
+/msd_deezer_workspace/audio/
+/msd_deezer_workspace/cache/
+/msd_deezer_workspace/logs/
+/msd_deezer_workspace/cluster_results/
+/msd_deezer_workspace/features/raw/
+/msd_deezer_workspace/features/feature_vectors.csv
+/msd_deezer_workspace/data/msd_deezer_matches.csv
+/msd_deezer_workspace/data/*.tmp
+/msd_deezer_workspace/data/*.pending.csv
+/calendar/
+
+# Large audio and extracted feature artifacts
+*.wav
+*.mp3
+*.flac
+*.ogg
+*.m4a
+*.aac
+*.wma
+*.aiff
+*.npz
+*.npy
 *.h5
-*.pt
-*.pth
-*.ckpt
 
-# Temporary files
-*.tmp
-*.temp
+# Logs, temp files, and archives
 *.log
-install_log_*.txt
-
-# Runtime artifacts / caches
-data/songs.csv
-download_checkpoint_with_genre.json
-deezer_search_cache.json
-src/data_collection/download_stats/*.png
-tmp_*/
-
-# OS files
-.DS_Store
-Thumbs.db
-
-# Jupyter notebooks checkpoints
-.ipynb_checkpoints/
-
-# Distribution / packaging
-dist/
-build/
-*.egg-info/
-
+*.tmp
+*.zip
+*.tar
+*.gz
+*.bz2
+*.xz
+*.7z
+*.rar

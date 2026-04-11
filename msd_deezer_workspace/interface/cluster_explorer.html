@@ -1,0 +1,2300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MSD Cluster Explorer</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #eef4ef;
+      --card: rgba(248, 251, 247, 0.97);
+      --line: rgba(40, 77, 68, 0.18);
+      --text: #16342e;
+      --muted: #5d756d;
+      --accent: #176a58;
+      --accent-soft: #d9ebe3;
+      --highlight: #b85a2f;
+      --shadow: 0 4px 18px rgba(18, 46, 40, 0.1), 0 1px 4px rgba(18, 46, 40, 0.06);
+      --radius: 20px;
+      --radius-sm: 12px;
+      --font-sans: "Segoe UI Variable Text", "Segoe UI", Aptos, sans-serif;
+      --font-display: "Segoe UI Variable Display", "Trebuchet MS", "Segoe UI", sans-serif;
+      --font-mono: Consolas, "Courier New", monospace;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: var(--font-sans);
+      color: var(--text);
+      background:
+        radial-gradient(circle at top left, rgba(184, 90, 47, 0.14), transparent 22%),
+        radial-gradient(circle at top right, rgba(23, 106, 88, 0.14), transparent 24%),
+        linear-gradient(180deg, #f7fbf7 0%, #e5eee6 100%);
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background-image:
+        linear-gradient(rgba(19, 53, 46, 0.035) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(19, 53, 46, 0.035) 1px, transparent 1px);
+      background-size: 20px 20px;
+      mask-image: linear-gradient(180deg, rgba(0,0,0,0.5), transparent 80%);
+    }
+
+    /* ── Shell ── */
+    .shell {
+      display: grid;
+      grid-template-rows: auto auto auto;
+      gap: 10px;
+      padding: 10px;
+      min-height: 100vh;
+    }
+
+    .panel {
+      background: var(--card);
+      border-radius: var(--radius);
+      border: 1px solid rgba(255, 255, 255, 0.82);
+      box-shadow: var(--shadow);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .panel::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      border-radius: inherit;
+      background: linear-gradient(180deg, rgba(255,255,255,0.18), transparent 28%);
+    }
+
+    .panel > * { position: relative; z-index: 1; }
+
+    /* ── Top bar ── */
+    .top-bar {
+      display: flex;
+      align-items: center;
+      gap: 18px;
+      padding: 12px 18px;
+      flex-wrap: wrap;
+    }
+
+    .top-bar-brand h1 {
+      margin: 0;
+      font-family: var(--font-display);
+      font-size: 1.3rem;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      line-height: 1.1;
+    }
+
+    .top-bar-brand p {
+      margin: 3px 0 0;
+      font-size: 0.79rem;
+      color: var(--muted);
+    }
+
+    .top-bar-stats {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .stat-pill {
+      display: inline-flex;
+      flex-direction: column;
+      gap: 1px;
+      padding: 7px 12px;
+      border-radius: var(--radius-sm);
+      background: linear-gradient(180deg, rgba(255,255,255,0.9), rgba(234,242,236,0.9));
+      border: 1px solid var(--line);
+    }
+
+    .stat-pill-label {
+      font-size: 0.68rem;
+      font-family: var(--font-mono);
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      color: var(--muted);
+    }
+
+    .stat-pill-value {
+      font-size: 1.05rem;
+      font-weight: 700;
+      line-height: 1.2;
+    }
+
+    .top-bar-algo {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .section-label {
+      font-size: 0.7rem;
+      font-family: var(--font-mono);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+      white-space: nowrap;
+    }
+
+    /* ── Algorithm buttons ── */
+    .algo-buttons {
+      display: flex;
+      gap: 6px;
+    }
+
+    .algorithm-button {
+      padding: 7px 13px;
+      border-radius: 11px;
+      border: 1px solid rgba(23, 106, 88, 0.18);
+      background: linear-gradient(180deg, rgba(255,255,255,0.95), rgba(230,240,235,0.95));
+      color: var(--text);
+      font: inherit;
+      font-family: var(--font-mono);
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      cursor: pointer;
+      box-shadow: 0 2px 0 rgba(22, 52, 46, 0.08);
+      transition: transform 130ms ease, border-color 130ms ease, background 130ms ease, box-shadow 130ms ease;
+    }
+
+    .algorithm-button:hover {
+      transform: translateY(-1px);
+      border-color: rgba(23, 106, 88, 0.32);
+      box-shadow: 0 3px 0 rgba(22, 52, 46, 0.1);
+    }
+
+    .algorithm-button.active {
+      background: linear-gradient(135deg, rgba(23, 106, 88, 0.94), rgba(20, 75, 66, 0.92));
+      color: white;
+      border-color: transparent;
+      box-shadow: 0 3px 0 rgba(10, 42, 36, 0.2);
+    }
+
+    .algo-note {
+      font-size: 0.78rem;
+      color: var(--muted);
+    }
+
+    /* ── Workspace (3 columns) ── */
+    .workspace {
+      display: grid;
+      grid-template-columns: 255px 1fr 345px;
+      gap: 10px;
+      align-items: start;
+    }
+
+    /* ── Songs panel ── */
+    .songs-panel {
+      position: sticky;
+      top: 10px;
+      display: grid;
+      grid-template-rows: auto auto 1fr;
+      max-height: calc(100vh - 130px);
+    }
+
+    .songs-panel-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 14px 6px;
+    }
+
+    .songs-panel-head h2 {
+      margin: 0;
+      font-size: 1.05rem;
+    }
+
+    .count-tag {
+      font-size: 0.74rem;
+      font-family: var(--font-mono);
+      color: var(--accent);
+      background: var(--accent-soft);
+      border-radius: 99px;
+      padding: 2px 9px;
+      border: 1px solid rgba(23,106,88,0.14);
+    }
+
+    .songs-search-wrap {
+      padding: 0 10px 8px;
+    }
+
+    .songs-search-wrap input[type="search"] {
+      width: 100%;
+      padding: 9px 12px;
+      border-radius: 12px;
+      border: 1px solid rgba(23, 106, 88, 0.2);
+      background: rgba(255, 255, 255, 0.95);
+      font: inherit;
+      font-size: 0.86rem;
+      color: var(--text);
+      outline: none;
+      box-shadow: inset 0 2px 0 rgba(23,106,88,0.03);
+    }
+
+    .songs-search-wrap input[type="search"]:focus {
+      border-color: rgba(23, 106, 88, 0.45);
+      box-shadow: 0 0 0 3px rgba(23, 106, 88, 0.1);
+    }
+
+    .song-list {
+      overflow-y: auto;
+      padding: 0 6px 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .song-item {
+      padding: 8px 10px;
+      border-radius: 10px;
+      cursor: pointer;
+      border: 1px solid transparent;
+      transition: background 110ms, border-color 110ms;
+      min-width: 0;
+    }
+
+    .song-item:hover {
+      background: rgba(23, 106, 88, 0.07);
+      border-color: rgba(23, 106, 88, 0.12);
+    }
+
+    .song-item:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 1px;
+    }
+
+    .song-item.selected {
+      background: linear-gradient(135deg, rgba(23, 106, 88, 0.93), rgba(20, 80, 70, 0.88));
+      color: white;
+      border-color: transparent;
+    }
+
+    .song-item-artist {
+      font-size: 0.72rem;
+      color: var(--muted);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .song-item.selected .song-item-artist {
+      color: rgba(255, 255, 255, 0.68);
+    }
+
+    .song-item-title {
+      font-size: 0.87rem;
+      font-weight: 600;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      margin-top: 1px;
+    }
+
+    /* ── Plots panel ── */
+    .plots-panel {
+      display: grid;
+      gap: 0;
+    }
+
+    .plots-panel-head {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 12px 14px 10px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .plots-panel-title {
+      font-size: 1rem;
+      font-weight: 700;
+    }
+
+    .plot-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      padding: 10px;
+    }
+
+    .plot-card {
+      padding: 12px;
+      display: grid;
+      gap: 8px;
+      border-radius: var(--radius-sm);
+      background: rgba(255, 255, 255, 0.72);
+      border: 1px solid rgba(23, 106, 88, 0.14);
+      cursor: default;
+      transition: border-color 160ms, box-shadow 160ms;
+    }
+
+    .plot-card.active {
+      border-color: rgba(23, 106, 88, 0.45);
+      box-shadow: 0 0 0 3px rgba(23, 106, 88, 0.09);
+    }
+
+    .plot-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+    }
+
+    .plot-header h3 {
+      margin: 0;
+      font-size: 0.95rem;
+    }
+
+    .plot-subtitle {
+      font-size: 0.74rem;
+      color: var(--muted);
+      margin-top: 2px;
+    }
+
+    .plot-pill {
+      padding: 4px 9px;
+      border-radius: 99px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-size: 0.7rem;
+      font-weight: 700;
+      font-family: var(--font-mono);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      cursor: pointer;
+      border: 1px solid rgba(23, 106, 88, 0.14);
+      white-space: nowrap;
+      transition: background 110ms, color 110ms;
+    }
+
+    .plot-card.active .plot-pill {
+      background: var(--accent);
+      color: white;
+      border-color: transparent;
+    }
+
+    .plot-canvas-wrap {
+      border-radius: 10px;
+      overflow: hidden;
+      border: 1px solid rgba(23, 106, 88, 0.1);
+      background: rgba(255, 255, 255, 0.9);
+    }
+
+    canvas {
+      width: 100%;
+      height: 250px;
+      display: block;
+      cursor: crosshair;
+    }
+
+    .plot-status {
+      font-size: 0.78rem;
+      color: var(--muted);
+      min-height: 1em;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    /* ── Detail panel (right column) ── */
+    .detail-panel {
+      position: sticky;
+      top: 10px;
+      display: grid;
+      gap: 10px;
+    }
+
+    /* Selected song card */
+    .selected-song-section {
+      display: grid;
+      gap: 12px;
+      padding: 16px;
+    }
+
+    .song-kicker {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 10px;
+      border-radius: 9px;
+      background: linear-gradient(180deg, rgba(23,106,88,0.12), rgba(255,255,255,0.86));
+      color: var(--accent);
+      font-size: 0.7rem;
+      font-weight: 700;
+      font-family: var(--font-mono);
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      width: fit-content;
+      border: 1px solid rgba(23,106,88,0.14);
+    }
+
+    .song-title {
+      margin: 0;
+      font-family: var(--font-display);
+      font-size: 1.4rem;
+      font-weight: 800;
+      line-height: 1.1;
+      letter-spacing: -0.01em;
+    }
+
+    .song-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .meta-chip,
+    .cluster-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 5px 9px;
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.9);
+      border: 1px solid rgba(23, 106, 88, 0.12);
+      font-size: 0.79rem;
+      font-family: var(--font-mono);
+    }
+
+    .cluster-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .source-grid {
+      display: grid;
+      gap: 8px;
+      padding: 10px 12px;
+      border-radius: 12px;
+      background: linear-gradient(180deg, rgba(255,255,255,0.88), rgba(238,244,240,0.92));
+      border: 1px solid rgba(23,106,88,0.1);
+    }
+
+    .source-row { display: grid; gap: 2px; }
+
+    .source-label {
+      font-size: 0.68rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      font-family: var(--font-mono);
+    }
+
+    .source-value { font-size: 0.88rem; line-height: 1.35; }
+    .source-value a { color: var(--accent); text-decoration: none; }
+    .source-value a:hover { text-decoration: underline; }
+
+    audio { width: 100%; }
+
+    .algorithm-note { font-size: 0.82rem; color: var(--muted); }
+
+    /* Recommendations section */
+    .recs-section {
+      display: grid;
+      grid-template-rows: auto auto 1fr;
+      gap: 8px;
+      padding: 14px;
+    }
+
+    .recs-section-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .recs-section-head h2 {
+      margin: 0;
+      font-size: 1.05rem;
+    }
+
+    .recs-meta { font-size: 0.79rem; color: var(--muted); }
+
+    .recommendation-list {
+      display: grid;
+      gap: 8px;
+      max-height: 38vh;
+      overflow-y: auto;
+    }
+
+    .recommendation-card {
+      padding: 11px 13px;
+      border-radius: 14px;
+      background: linear-gradient(180deg, rgba(255,255,255,0.9), rgba(242,247,244,0.95));
+      border: 1px solid rgba(23,106,88,0.12);
+      display: grid;
+      gap: 8px;
+    }
+
+    .recommendation-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: flex-start;
+    }
+
+    .recommendation-title {
+      margin: 0;
+      font-size: 0.9rem;
+      line-height: 1.2;
+    }
+
+    .recommendation-artist { font-size: 0.79rem; color: var(--muted); }
+
+    .recommendation-metrics { font-size: 0.77rem; color: var(--muted); }
+
+    .recommendation-actions {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .small-button {
+      border: none;
+      background: linear-gradient(135deg, var(--highlight), #ad4d2e);
+      color: white;
+      font: inherit;
+      font-family: var(--font-mono);
+      font-size: 0.74rem;
+      padding: 7px 11px;
+      border-radius: 9px;
+      cursor: pointer;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      box-shadow: 0 3px 0 rgba(100, 42, 22, 0.16);
+      white-space: nowrap;
+    }
+
+    .small-button.secondary {
+      background: linear-gradient(180deg, rgba(23,106,88,0.1), rgba(255,255,255,0.92));
+      color: var(--accent);
+      border: 1px solid rgba(23,106,88,0.14);
+      box-shadow: 0 3px 0 rgba(22,52,46,0.08);
+    }
+
+    /* ── Clustering details (collapsible bottom) ── */
+    .clustering-details {
+      overflow: hidden;
+    }
+
+    .clustering-details summary {
+      padding: 11px 18px;
+      cursor: pointer;
+      list-style: none;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.74rem;
+      font-family: var(--font-mono);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+      user-select: none;
+      border-bottom: 1px solid transparent;
+      transition: border-color 160ms;
+    }
+
+    .clustering-details[open] summary {
+      border-bottom-color: var(--line);
+    }
+
+    .clustering-details summary::before {
+      content: "▸";
+      display: inline-block;
+      transition: transform 160ms;
+      font-size: 0.65rem;
+    }
+
+    .clustering-details[open] summary::before {
+      transform: rotate(90deg);
+    }
+
+    .algorithm-insights-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      padding: 12px;
+    }
+
+    .algorithm-detail-card {
+      padding: 14px;
+      border-radius: var(--radius-sm);
+      background: rgba(255, 255, 255, 0.75);
+      border: 1px solid rgba(23,106,88,0.12);
+      display: grid;
+      gap: 12px;
+      transition: border-color 160ms, box-shadow 160ms;
+    }
+
+    .algorithm-detail-card.active {
+      border-color: rgba(23, 106, 88, 0.4);
+      box-shadow: 0 0 0 3px rgba(23, 106, 88, 0.08);
+    }
+
+    .algorithm-detail-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+    }
+
+    .algorithm-detail-head h3 { margin: 0; font-size: 1.05rem; }
+
+    .algorithm-detail-note {
+      margin-top: 4px;
+      font-size: 0.8rem;
+      color: var(--muted);
+    }
+
+    .detail-stat-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .detail-stat {
+      padding: 10px 12px;
+      border-radius: 10px;
+      background: rgba(255,255,255,0.9);
+      border: 1px solid rgba(23,106,88,0.1);
+    }
+
+    .detail-stat-label {
+      display: block;
+      font-size: 0.68rem;
+      font-family: var(--font-mono);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+      margin-bottom: 4px;
+    }
+
+    .detail-stat-value {
+      display: block;
+      font-size: 1.05rem;
+      font-weight: 700;
+    }
+
+    .metric-chip-grid { display: flex; flex-wrap: wrap; gap: 7px; }
+
+    .metric-chip {
+      display: grid;
+      gap: 3px;
+      padding: 8px 10px;
+      border-radius: 10px;
+      background: linear-gradient(180deg, rgba(215,234,224,0.75), rgba(255,255,255,0.9));
+      border: 1px solid rgba(23,106,88,0.1);
+      min-width: 100px;
+    }
+
+    .metric-chip-label {
+      font-size: 0.66rem;
+      font-family: var(--font-mono);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+    }
+
+    .metric-chip-value { font-size: 0.9rem; font-weight: 700; }
+
+    .cluster-distribution-wrap { display: grid; gap: 8px; }
+
+    .cluster-distribution-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 0.78rem;
+      color: var(--muted);
+    }
+
+    .cluster-distribution-list {
+      display: grid;
+      gap: 5px;
+      max-height: 200px;
+      overflow-y: auto;
+    }
+
+    .distribution-row {
+      display: grid;
+      gap: 5px;
+      padding: 8px 10px;
+      border-radius: 10px;
+      background: rgba(255,255,255,0.82);
+      border: 1px solid rgba(23,106,88,0.08);
+    }
+
+    .distribution-meta {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 0.81rem;
+    }
+
+    .distribution-label { font-family: var(--font-mono); }
+    .distribution-size { color: var(--muted); white-space: nowrap; }
+
+    .distribution-bar {
+      height: 8px;
+      border-radius: 999px;
+      background: rgba(23,106,88,0.08);
+      overflow: hidden;
+    }
+
+    .distribution-bar-fill {
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, rgba(23,106,88,0.9), rgba(88,162,128,0.85));
+    }
+
+    .distribution-row.noise .distribution-bar-fill {
+      background: linear-gradient(90deg, rgba(184,90,47,0.85), rgba(231,155,120,0.85));
+    }
+
+    /* ── Empty state ── */
+    .empty-state {
+      padding: 14px;
+      border-radius: 12px;
+      background: rgba(255,255,255,0.78);
+      border: 1px dashed rgba(31,106,93,0.2);
+      color: var(--muted);
+      font-size: 0.88rem;
+    }
+
+    /* ── Responsive ── */
+    @media (max-width: 1200px) {
+      .workspace {
+        grid-template-columns: 240px 1fr;
+        grid-template-rows: auto auto;
+      }
+      .detail-panel {
+        grid-column: 1 / -1;
+        grid-template-columns: 1fr 1fr;
+        position: static;
+      }
+      .recommendation-list { max-height: 280px; }
+    }
+
+    @media (max-width: 780px) {
+      .workspace { grid-template-columns: 1fr; }
+      .songs-panel { position: static; max-height: 45vh; }
+      .detail-panel { grid-template-columns: 1fr; position: static; }
+      .plot-grid { grid-template-columns: 1fr; }
+      .algorithm-insights-grid { grid-template-columns: 1fr; }
+      .top-bar-algo { margin-left: 0; }
+    }
+  </style>
+  <style>
+    :root {
+      --ui-shell: rgba(255, 255, 255, 0.78);
+      --ui-ink: #18352f;
+      --ui-muted: #66746d;
+      --ui-accent: #0f766e;
+      --ui-accent-strong: #0b5c57;
+      --ui-coral: #d96b3c;
+      --ui-line: rgba(17, 64, 57, 0.12);
+      --ui-line-strong: rgba(17, 64, 57, 0.2);
+      --ui-shadow: 0 24px 60px rgba(24, 53, 47, 0.12), 0 10px 24px rgba(24, 53, 47, 0.08);
+      --ui-shadow-soft: 0 14px 34px rgba(24, 53, 47, 0.09);
+    }
+
+    body {
+      color: var(--ui-ink);
+      background:
+        radial-gradient(circle at 12% 16%, rgba(217, 107, 60, 0.24), transparent 24%),
+        radial-gradient(circle at 85% 10%, rgba(15, 118, 110, 0.22), transparent 26%),
+        radial-gradient(circle at 75% 82%, rgba(199, 144, 46, 0.18), transparent 18%),
+        linear-gradient(180deg, #fcf8ef 0%, #edf6f0 55%, #e7f1ec 100%);
+    }
+
+    .shell {
+      gap: 18px;
+      padding: 24px;
+      max-width: 1600px;
+      margin: 0 auto;
+    }
+
+    .panel {
+      border-radius: 30px;
+      background: var(--ui-shell);
+      border: 1px solid rgba(255, 255, 255, 0.72);
+      box-shadow: var(--ui-shadow);
+      backdrop-filter: blur(18px);
+    }
+
+    .panel::after {
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.42), transparent 34%);
+    }
+
+    .top-bar {
+      display: grid;
+      grid-template-columns: minmax(0, 1.3fr) minmax(360px, 0.9fr);
+      gap: 18px;
+      padding: 24px;
+      border-radius: 34px;
+    }
+
+    .top-bar-brand {
+      display: grid;
+      gap: 16px;
+      align-content: start;
+    }
+
+    .hero-kicker {
+      display: inline-flex;
+      width: fit-content;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      border-radius: 999px;
+      border: 1px solid rgba(15, 118, 110, 0.16);
+      background: linear-gradient(135deg, rgba(15, 118, 110, 0.14), rgba(255, 255, 255, 0.86));
+      color: var(--ui-accent-strong);
+      font-size: 0.72rem;
+      font-family: var(--font-mono);
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+    }
+
+    .top-bar-brand h1 {
+      margin: 0;
+      max-width: 11ch;
+      font-family: "Aptos Display", var(--font-display);
+      font-size: clamp(2rem, 3vw, 3.5rem);
+      font-weight: 800;
+      letter-spacing: -0.04em;
+      line-height: 0.95;
+    }
+
+    .top-bar-brand p {
+      margin: 0;
+      max-width: 60ch;
+      color: var(--ui-muted);
+      font-size: 1rem;
+      line-height: 1.6;
+    }
+
+    .top-bar-stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+      gap: 12px;
+    }
+
+    .stat-pill {
+      display: grid;
+      gap: 6px;
+      padding: 16px 18px;
+      border-radius: 22px;
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(236, 246, 241, 0.92));
+      border: 1px solid var(--ui-line);
+      box-shadow: var(--ui-shadow-soft);
+    }
+
+    .stat-pill-label {
+      font-size: 0.68rem;
+      font-family: var(--font-mono);
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--ui-muted);
+    }
+
+    .stat-pill-value {
+      font-size: 1.5rem;
+      font-weight: 800;
+      line-height: 1;
+      letter-spacing: -0.03em;
+    }
+
+    .stat-pill-meta {
+      font-size: 0.82rem;
+      color: var(--ui-muted);
+      line-height: 1.45;
+    }
+
+    .top-bar-algo {
+      margin-left: 0;
+      display: grid;
+      gap: 14px;
+      align-content: stretch;
+    }
+
+    .hero-module {
+      display: grid;
+      gap: 12px;
+      padding: 18px;
+      border-radius: 24px;
+      border: 1px solid rgba(15, 118, 110, 0.12);
+      background:
+        linear-gradient(140deg, rgba(15, 118, 110, 0.08), rgba(255, 255, 255, 0.9) 34%),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(241, 247, 244, 0.92));
+      box-shadow: var(--ui-shadow-soft);
+    }
+
+    .section-label {
+      letter-spacing: 0.12em;
+      color: var(--ui-muted);
+    }
+
+    .algorithm-overview,
+    .selection-spotlight,
+    .songs-summary,
+    .plot-guide,
+    .details-intro,
+    .song-subtitle,
+    .stat-pill-meta {
+      color: var(--ui-muted);
+    }
+
+    .spotlight-title {
+      font-family: "Aptos Display", var(--font-display);
+      font-size: 1.08rem;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      line-height: 1.1;
+    }
+
+    .spotlight-copy,
+    .plots-panel-copy {
+      font-size: 0.9rem;
+      line-height: 1.55;
+    }
+
+    .spotlight-chip-row,
+    .recommendation-score-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .spotlight-chip,
+    .score-chip,
+    .song-item-cluster,
+    .song-item-source,
+    .mini-badge,
+    .active-algorithm-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 7px 10px;
+      border-radius: 999px;
+      border: 1px solid rgba(15, 118, 110, 0.14);
+      background: rgba(255, 255, 255, 0.88);
+      color: var(--ui-accent-strong);
+      font-size: 0.74rem;
+      font-family: var(--font-mono);
+    }
+
+    .overview-grid,
+    .detail-stat-grid,
+    .song-focus-grid {
+      display: grid;
+      gap: 10px;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .overview-stat,
+    .detail-stat,
+    .focus-stat {
+      padding: 12px;
+      border-radius: 16px;
+      border: 1px solid var(--ui-line);
+      background: rgba(255, 255, 255, 0.84);
+    }
+
+    .overview-stat span,
+    .focus-label,
+    .detail-stat-label {
+      display: block;
+      margin-bottom: 5px;
+      font-size: 0.66rem;
+      font-family: var(--font-mono);
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--ui-muted);
+    }
+
+    .workspace {
+      grid-template-columns: 290px minmax(0, 1fr) 360px;
+      gap: 18px;
+    }
+
+    .songs-panel,
+    .detail-panel {
+      top: 24px;
+    }
+
+    .songs-panel {
+      display: grid;
+      grid-template-rows: auto auto auto minmax(0, 1fr);
+      gap: 12px;
+      padding: 16px;
+      max-height: calc(100vh - 48px);
+    }
+
+    .count-tag {
+      min-width: 52px;
+      padding: 6px 10px;
+      color: var(--ui-accent-strong);
+      background: linear-gradient(135deg, rgba(15, 118, 110, 0.12), rgba(255, 255, 255, 0.88));
+      border: 1px solid rgba(15, 118, 110, 0.14);
+    }
+
+    .songs-search-wrap {
+      padding: 0;
+    }
+
+    .songs-search-wrap input[type="search"] {
+      padding: 13px 14px;
+      border-radius: 16px;
+      border-color: rgba(15, 118, 110, 0.18);
+      box-shadow: inset 0 2px 0 rgba(15, 118, 110, 0.03);
+    }
+
+    .songs-search-wrap input[type="search"]:focus {
+      border-color: rgba(15, 118, 110, 0.44);
+      box-shadow: 0 0 0 4px rgba(15, 118, 110, 0.1);
+    }
+
+    .song-list,
+    .recommendation-list,
+    .cluster-distribution-list {
+      gap: 10px;
+    }
+
+    .song-item,
+    .recommendation-card,
+    .plot-card,
+    .algorithm-detail-card {
+      border-radius: 24px;
+      border-color: var(--ui-line);
+      box-shadow: var(--ui-shadow-soft);
+    }
+
+    .song-item {
+      display: grid;
+      gap: 10px;
+      padding: 14px;
+      text-align: left;
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(243, 248, 246, 0.9));
+    }
+
+    .song-item-meta {
+      font-size: 0.84rem;
+      line-height: 1.45;
+      color: var(--ui-muted);
+    }
+
+    .song-item.selected {
+      background: linear-gradient(155deg, rgba(11, 92, 87, 0.98), rgba(15, 118, 110, 0.9) 58%, rgba(32, 149, 140, 0.78));
+      box-shadow: 0 22px 36px rgba(15, 118, 110, 0.28);
+    }
+
+    .song-item.selected .song-item-meta {
+      color: rgba(255, 255, 255, 0.78);
+    }
+
+    .song-item.selected .song-item-cluster,
+    .song-item.selected .song-item-source,
+    .song-item.selected .mini-badge {
+      background: rgba(255, 255, 255, 0.14);
+      color: white;
+      border-color: rgba(255, 255, 255, 0.16);
+    }
+
+    .song-item-top,
+    .song-item-footer,
+    .plot-card-footer,
+    .recommendation-head,
+    .recommendation-actions,
+    .algorithm-detail-head,
+    .cluster-distribution-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .plots-panel-head {
+      justify-content: space-between;
+      align-items: flex-start;
+      padding: 20px 22px 14px;
+    }
+
+    .plots-panel-title {
+      font-size: 1.45rem;
+      font-weight: 800;
+      letter-spacing: -0.03em;
+    }
+
+    .plots-panel-copy {
+      margin: 6px 0 0;
+      max-width: 62ch;
+    }
+
+    .plot-head-side {
+      display: grid;
+      gap: 10px;
+      justify-items: end;
+    }
+
+    .plot-foot-note,
+    .recs-meta {
+      font-size: 0.84rem;
+      line-height: 1.5;
+      color: var(--ui-muted);
+    }
+
+    .plot-grid {
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 16px;
+      padding: 18px;
+    }
+
+    .plot-card {
+      padding: 16px;
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.84), rgba(240, 246, 243, 0.88));
+    }
+
+    .plot-card.active,
+    .algorithm-detail-card.active {
+      border-color: rgba(15, 118, 110, 0.32);
+      box-shadow: 0 20px 32px rgba(15, 118, 110, 0.14);
+    }
+
+    .plot-overline {
+      font-size: 0.7rem;
+      font-family: var(--font-mono);
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--ui-muted);
+      margin-bottom: 6px;
+    }
+
+    .plot-pill,
+    .small-button {
+      border-radius: 999px;
+      letter-spacing: 0.08em;
+    }
+
+    .plot-pill {
+      padding: 9px 12px;
+      background: rgba(255, 255, 255, 0.88);
+      color: var(--ui-accent-strong);
+      border: 1px solid rgba(15, 118, 110, 0.14);
+    }
+
+    .plot-card.active .plot-pill,
+    .cluster-chip.active {
+      background: linear-gradient(135deg, rgba(15, 118, 110, 0.96), rgba(11, 92, 87, 0.9));
+      color: white;
+      border-color: transparent;
+    }
+
+    .plot-canvas-wrap {
+      min-height: 320px;
+      border-radius: 18px;
+      border-color: rgba(15, 118, 110, 0.12);
+      background:
+        radial-gradient(circle at top left, rgba(217, 107, 60, 0.08), transparent 28%),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(234, 244, 241, 0.92));
+    }
+
+    canvas {
+      height: 320px;
+    }
+
+    .selected-song-section,
+    .recs-section {
+      padding: 20px;
+      gap: 14px;
+    }
+
+    .selected-song-hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 155px;
+      gap: 16px;
+    }
+
+    .song-title {
+      margin-top: 12px;
+      font-size: 1.85rem;
+      letter-spacing: -0.04em;
+    }
+
+    .song-player-wrap,
+    .source-grid {
+      padding: 14px;
+      border-radius: 22px;
+      border-color: var(--ui-line);
+    }
+
+    .recs-section-head h2 {
+      font-size: 1.25rem;
+    }
+
+    .recommendation-card {
+      grid-template-columns: 56px minmax(0, 1fr);
+      padding: 14px;
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(242, 247, 244, 0.96));
+    }
+
+    .recommendation-list {
+      max-height: 50vh;
+      overflow: auto;
+    }
+
+    .recommendation-body {
+      display: grid;
+      gap: 10px;
+      min-width: 0;
+    }
+
+    .recommendation-title {
+      margin: 0;
+      font-size: 1rem;
+      line-height: 1.2;
+      letter-spacing: -0.02em;
+    }
+
+    .recommendation-artist,
+    .recommendation-metrics {
+      font-size: 0.84rem;
+      line-height: 1.5;
+      color: var(--ui-muted);
+    }
+
+    .recommendation-rank {
+      width: 56px;
+      height: 56px;
+      display: grid;
+      place-items: center;
+      border-radius: 18px;
+      background: linear-gradient(135deg, rgba(217, 107, 60, 0.92), rgba(199, 144, 46, 0.84));
+      color: white;
+      font-family: "Aptos Display", var(--font-display);
+      font-size: 1.15rem;
+      font-weight: 800;
+      letter-spacing: -0.04em;
+      box-shadow: 0 14px 24px rgba(217, 107, 60, 0.2);
+    }
+
+    .small-button {
+      padding: 10px 14px;
+      background: linear-gradient(135deg, var(--ui-coral), #c4582c);
+      box-shadow: 0 12px 18px rgba(196, 88, 44, 0.18);
+    }
+
+    .details-intro {
+      padding: 0 22px 16px;
+      font-size: 0.9rem;
+      line-height: 1.55;
+    }
+
+    @media (max-width: 1320px) {
+      .top-bar { grid-template-columns: 1fr; }
+      .workspace { grid-template-columns: 280px minmax(0, 1fr); }
+      .detail-panel {
+        grid-column: 1 / -1;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        position: static;
+      }
+    }
+
+    @media (max-width: 980px) {
+      .workspace { grid-template-columns: 1fr; }
+      .songs-panel,
+      .detail-panel { position: static; max-height: none; }
+      .detail-panel { grid-template-columns: 1fr; }
+      .plots-panel-head { flex-direction: column; }
+      .plot-head-side { justify-items: start; }
+      .plot-guide,
+      .plot-status { text-align: left; }
+      .selected-song-hero,
+      .detail-stat-grid,
+      .overview-grid,
+      .song-focus-grid,
+      .source-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+
+    <!-- Top bar: brand + stats + algorithm selector -->
+    <header class="panel top-bar">
+      <div class="top-bar-brand">
+        <h1>Cluster Space Explorer</h1>
+        <p>Browse Deezer audio in a shared 2D feature space · compare KMeans, GMM, and HDBSCAN</p>
+      </div>
+      <div class="top-bar-stats" id="hero-stats"></div>
+      <div class="top-bar-algo">
+        <span class="section-label">Active Clustering</span>
+        <div id="algorithm-buttons" class="algo-buttons"></div>
+        <span id="algorithm-note" class="algo-note"></span>
+      </div>
+    </header>
+
+    <!-- Three-column workspace -->
+    <div class="workspace">
+
+      <!-- Left: song catalog -->
+      <aside class="panel songs-panel">
+        <div class="songs-panel-head">
+          <div>
+            <div class="section-label">Audio Catalog</div>
+            <h2>All Songs</h2>
+          </div>
+          <span id="list-count" class="count-tag">—</span>
+        </div>
+        <div class="songs-search-wrap">
+          <input id="song-search" type="search" placeholder="Search artist, title, MSD, Deezer…">
+        </div>
+        <div id="song-list" class="song-list"></div>
+      </aside>
+
+      <!-- Center: feature space plots -->
+      <section class="panel plots-panel">
+        <div class="plots-panel-head">
+          <div>
+            <div class="section-label">Feature Space</div>
+            <div class="plots-panel-title">2D Projection</div>
+          </div>
+          <span id="active-algorithm-label" class="section-label"></span>
+        </div>
+        <div class="plot-grid" id="plot-grid"></div>
+      </section>
+
+      <!-- Right: selected song + recommendations -->
+      <aside class="detail-panel">
+        <section class="panel selected-song-section" id="selected-song-card">
+          <div class="empty-state">Select a song from the catalog or click a point in the plots.</div>
+        </section>
+        <section class="panel recs-section">
+          <div class="recs-section-head">
+            <div>
+              <div class="section-label">Nearest Matches</div>
+              <h2>Recommendations</h2>
+            </div>
+          </div>
+          <div id="recommendations-meta" class="recs-meta"></div>
+          <div id="recommendation-list" class="recommendation-list">
+            <div class="empty-state">Recommendations appear after you select a song.</div>
+          </div>
+        </section>
+      </aside>
+    </div>
+
+    <!-- Collapsible algorithm details -->
+    <details class="panel clustering-details">
+      <summary>Clustering Details</summary>
+      <div class="algorithm-insights-grid" id="algorithm-details-grid"></div>
+    </details>
+
+  </main>
+  <script>
+    const state = {
+      payload: null,
+      songsById: new Map(),
+      selectedSongId: null,
+      activeAlgorithm: null,
+      recommendations: [],
+      filteredSongIds: [],
+      canvases: new Map(),
+    };
+
+    const algorithmLabels = {
+      kmeans: "KMeans",
+      gmm: "GMM",
+      hdbscan: "HDBSCAN",
+    };
+
+    function escapeHtml(value) {
+      return String(value ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+    }
+
+    function formatClusterLabel(algorithm, info) {
+      if (!info || info.label === null || info.label === undefined) {
+        return "Unassigned";
+      }
+      if (algorithm === "hdbscan" && Number(info.label) === -1) {
+        return "Noise";
+      }
+      return `Cluster ${info.label}`;
+    }
+
+    function clusterColor(algorithm, label) {
+      if (label === null || label === undefined || Number.isNaN(Number(label))) {
+        return "rgba(120, 133, 140, 0.42)";
+      }
+      const numericLabel = Number(label);
+      if (algorithm === "hdbscan" && numericLabel === -1) {
+        return "rgba(122, 131, 138, 0.4)";
+      }
+      const baseShift = { kmeans: 18, gmm: 122, hdbscan: 222 }[algorithm] || 0;
+      const hue = (baseShift + numericLabel * 47) % 360;
+      return `hsla(${hue}, 68%, 47%, 0.86)`;
+    }
+
+    function formatWholeNumber(value) {
+      const numeric = Number(value);
+      if (!Number.isFinite(numeric)) return "n/a";
+      return Math.round(numeric).toLocaleString();
+    }
+
+    function formatDecimal(value, digits = 3) {
+      const numeric = Number(value);
+      if (!Number.isFinite(numeric)) return "n/a";
+      return numeric.toFixed(digits);
+    }
+
+    function formatPercent(value, digits = 1) {
+      const numeric = Number(value);
+      if (!Number.isFinite(numeric)) return "n/a";
+      return `${(numeric * 100).toFixed(digits)}%`;
+    }
+
+    function distributionLabel(item) {
+      if (item.isNoise) return "Noise";
+      return `Cluster ${item.label}`;
+    }
+
+    function projectionPadding(width, height) {
+      return Math.max(24, Math.min(width, height) * 0.08);
+    }
+
+    function projectionToCanvas(coords, width, height) {
+      const bounds = state.payload.projection;
+      const pad = projectionPadding(width, height);
+      const xRange = Math.max(bounds.xMax - bounds.xMin, 1e-9);
+      const yRange = Math.max(bounds.yMax - bounds.yMin, 1e-9);
+      const x = pad + ((coords.x - bounds.xMin) / xRange) * (width - pad * 2);
+      const y = height - pad - ((coords.y - bounds.yMin) / yRange) * (height - pad * 2);
+      return { x, y, pad };
+    }
+
+    function activeAlgorithmInfo() {
+      return state.payload?.algorithms?.[state.activeAlgorithm] || {};
+    }
+
+    function activeAlgorithmDetails() {
+      return activeAlgorithmInfo().details || {};
+    }
+
+    function currentSong() {
+      return state.songsById.get(state.selectedSongId) || null;
+    }
+
+    function countAudioReadySongs() {
+      return state.payload.songs.filter(song => song.hasAudio).length;
+    }
+
+    function assignmentCountForSong(song) {
+      return state.payload.summary.availableAlgorithms.filter(algorithm => {
+        const info = song.clusters[algorithm];
+        if (!info || info.label === null || info.label === undefined) return false;
+        if (algorithm === "hdbscan" && Number(info.label) === -1) return false;
+        return true;
+      }).length;
+    }
+
+    function ensureElementAfter(reference, markup) {
+      const template = document.createElement("template");
+      template.innerHTML = markup.trim();
+      reference.insertAdjacentElement("afterend", template.content.firstElementChild);
+    }
+
+    function enhanceLayoutSkeleton() {
+      const header = document.querySelector(".top-bar");
+      header.classList.add("fade-in");
+      header.querySelector(".top-bar-brand").innerHTML = `
+        <div class="hero-kicker">MSD + Deezer Cluster Atlas</div>
+        <h1>Explore song neighborhoods with a faster, clearer dashboard.</h1>
+        <p>Compare clustering behavior, inspect tracks, and audition recommendations from one workspace built around discovery instead of raw controls.</p>
+        <div class="top-bar-stats" id="hero-stats"></div>
+      `;
+      header.querySelector(".top-bar-algo").innerHTML = `
+        <section class="hero-module">
+          <div class="section-label">Active Clustering</div>
+          <div id="algorithm-buttons" class="algo-buttons"></div>
+          <div id="algorithm-note" class="algo-note"></div>
+          <div id="algorithm-overview" class="algorithm-overview"></div>
+        </section>
+        <section class="hero-module">
+          <div class="section-label">Selection Spotlight</div>
+          <div id="selection-spotlight" class="selection-spotlight"></div>
+        </section>
+      `;
+
+      const songsPanel = document.querySelector(".songs-panel");
+      songsPanel.classList.add("fade-in");
+      songsPanel.querySelector(".section-label").textContent = "Catalog";
+      songsPanel.querySelector("h2").textContent = "Song Library";
+      const searchWrap = songsPanel.querySelector(".songs-search-wrap");
+      searchWrap.querySelector("input").placeholder = "Search artist, title, album, MSD, Deezer, or track id";
+      if (!document.getElementById("catalog-summary")) {
+        ensureElementAfter(searchWrap, `<div id="catalog-summary" class="songs-summary"></div>`);
+      }
+
+      const plotsPanel = document.querySelector(".plots-panel");
+      plotsPanel.classList.add("fade-in");
+      plotsPanel.querySelector(".plots-panel-head").innerHTML = `
+        <div>
+          <div class="section-label">Feature Atlas</div>
+          <div class="plots-panel-title">Cluster landscapes</div>
+          <p class="plots-panel-copy">Each panel shows the same songs under a different clustering strategy. Click any point to change the anchor song and update recommendations across the dashboard.</p>
+        </div>
+        <div class="plot-head-side">
+          <span id="active-algorithm-label" class="active-algorithm-badge"></span>
+          <div id="plot-guide" class="plot-guide"></div>
+        </div>
+      `;
+
+      const detailPanel = document.querySelector(".detail-panel");
+      detailPanel.classList.add("fade-in");
+      document.getElementById("selected-song-card").innerHTML = `<div class="empty-state">Select a song from the library or click a point in the plots to open a focused listening view.</div>`;
+      document.getElementById("recommendations-meta").textContent = "Choose an anchor song to generate recommendations.";
+
+      const detailsPanel = document.querySelector(".clustering-details");
+      detailsPanel.classList.add("fade-in");
+      detailsPanel.open = true;
+      detailsPanel.querySelector("summary").textContent = "Model comparison";
+      if (!detailsPanel.querySelector(".details-intro")) {
+        ensureElementAfter(
+          detailsPanel.querySelector("summary"),
+          `<div class="details-intro">Use this section to compare how each algorithm partitions the catalog before you lock in the recommendation strategy on the top bar.</div>`
+        );
+      }
+    }
+
+    function renderDashboardChrome() {
+      const algorithmDetails = activeAlgorithmDetails();
+      const algorithmLabel = algorithmLabels[state.activeAlgorithm] || state.activeAlgorithm;
+      const song = currentSong();
+      const query = document.getElementById("song-search")?.value.trim() || "";
+      const largestClusterLabel = algorithmDetails.largestCluster ? distributionLabel(algorithmDetails.largestCluster) : "n/a";
+      const metricMarkup = (algorithmDetails.metricCards || []).slice(0, 3).map(item => (
+        `<span class="spotlight-chip">${escapeHtml(item.label)}: ${escapeHtml(item.value)}</span>`
+      )).join("");
+
+      document.getElementById("algorithm-overview").innerHTML = `
+        <div class="spotlight-title">${escapeHtml(algorithmLabel)}</div>
+        <div class="spotlight-copy">${escapeHtml(`${formatWholeNumber(algorithmDetails.clusterCount)} clusters across ${formatWholeNumber(algorithmDetails.samples)} songs.`)}</div>
+        <div class="overview-grid">
+          <div class="overview-stat">
+            <span>Coverage</span>
+            <strong>${escapeHtml(formatPercent(algorithmDetails.clusteredRatio, 0))}</strong>
+          </div>
+          <div class="overview-stat">
+            <span>Largest group</span>
+            <strong>${escapeHtml(largestClusterLabel)}</strong>
+          </div>
+        </div>
+        ${metricMarkup ? `<div class="spotlight-chip-row">${metricMarkup}</div>` : ""}
+      `;
+
+      if (!song) {
+        document.getElementById("selection-spotlight").innerHTML = `<div class="empty-state">Select a song from the catalog or click a plot point to focus the rest of the dashboard.</div>`;
+      } else {
+        const subline = [song.artist || "Unknown Artist", song.album, song.year].filter(Boolean).join(" / ");
+        document.getElementById("selection-spotlight").innerHTML = `
+          <div class="spotlight-title">${escapeHtml(song.title || "Untitled")}</div>
+          <div class="spotlight-copy">${escapeHtml(subline || "Song metadata is available below.")}</div>
+          <div class="spotlight-chip-row">
+            <span class="spotlight-chip">${escapeHtml(formatClusterLabel(state.activeAlgorithm, song.clusters[state.activeAlgorithm]))}</span>
+            <span class="spotlight-chip">${song.hasAudio ? "Audio ready" : "Metadata only"}</span>
+            <span class="spotlight-chip">${escapeHtml(`${assignmentCountForSong(song)} model assignments`)}</span>
+          </div>
+        `;
+      }
+
+      const catalogSummary = document.getElementById("catalog-summary");
+      if (catalogSummary) {
+        catalogSummary.textContent = query
+          ? `Showing ${state.filteredSongIds.length.toLocaleString()} matches for "${query}".`
+          : `${state.filteredSongIds.length.toLocaleString()} songs available, sorted by artist and title.`;
+      }
+
+      document.getElementById("plot-guide").textContent = song
+        ? `Highlighted rings show the live recommendation set around ${song.artist || "the selected artist"} - ${song.title}.`
+        : "Click a point to inspect a song and update the recommendation rail.";
+
+      document.getElementById("active-algorithm-label").textContent = `${algorithmLabel} drives recommendations`;
+    }
+
+    async function applySelection({ songId = state.selectedSongId, algorithm = state.activeAlgorithm, refreshSongList = false } = {}) {
+      state.activeAlgorithm = algorithm;
+      state.selectedSongId = songId;
+      renderAlgorithmButtons();
+      renderAlgorithmNote();
+      renderAlgorithmDetails();
+      if (refreshSongList) {
+        renderSongList();
+      } else {
+        syncSongList();
+      }
+      renderSelectedSong();
+      drawPlots();
+      await loadRecommendations();
+    }
+
+    async function fetchState() {
+      const response = await fetch("/api/state");
+      if (!response.ok) throw new Error("Could not load explorer state.");
+      state.payload = await response.json();
+      state.songsById = new Map(state.payload.songs.map(song => [song.id, song]));
+      state.activeAlgorithm = state.payload.summary.defaultAlgorithm;
+      state.selectedSongId = state.payload.listOrderSongIds[0] || state.payload.songs[0]?.id || null;
+      state.filteredSongIds = [...state.payload.listOrderSongIds];
+    }
+
+    function renderHeroStats() {
+      const songs = state.payload.summary.songs;
+      const audioReady = countAudioReadySongs();
+      const details = activeAlgorithmDetails();
+      const activeLabel = algorithmLabels[state.activeAlgorithm] || state.activeAlgorithm;
+      const selected = currentSong();
+      const statMarkup = [
+        {
+          label: "Catalog",
+          value: formatWholeNumber(songs),
+          meta: `${formatWholeNumber(audioReady)} songs have audio previews`,
+        },
+        {
+          label: `${activeLabel} clusters`,
+          value: formatWholeNumber(details.clusterCount),
+          meta: `${formatPercent(details.clusteredRatio, 0)} of songs are grouped`,
+        },
+        {
+          label: "Algorithms",
+          value: formatWholeNumber(state.payload.summary.availableAlgorithms.length),
+          meta: "Switch between KMeans, GMM, and HDBSCAN",
+        },
+        {
+          label: "Live picks",
+          value: formatWholeNumber(state.recommendations.length),
+          meta: selected ? `Ranked from ${selected.title}` : "Select a song to begin",
+        },
+      ];
+      document.getElementById("hero-stats").innerHTML = statMarkup.map(item => `
+        <div class="stat-pill">
+          <span class="stat-pill-label">${escapeHtml(item.label)}</span>
+          <span class="stat-pill-value">${escapeHtml(item.value)}</span>
+          <span class="stat-pill-meta">${escapeHtml(item.meta)}</span>
+        </div>
+      `).join("");
+    }
+
+    function renderAlgorithmButtons() {
+      const buttonsRoot = document.getElementById("algorithm-buttons");
+      buttonsRoot.innerHTML = "";
+      for (const algorithm of state.payload.summary.availableAlgorithms) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = `algorithm-button${algorithm === state.activeAlgorithm ? " active" : ""}`;
+        button.textContent = algorithmLabels[algorithm] || algorithm;
+        button.addEventListener("click", async () => {
+          await applySelection({ algorithm, refreshSongList: true });
+        });
+        buttonsRoot.appendChild(button);
+      }
+    }
+
+    function renderAlgorithmNote() {
+      const algorithmMeta = activeAlgorithmInfo();
+      const meta = algorithmMeta.metadata || {};
+      const details = algorithmMeta.details || {};
+      const clusterCount = meta.cluster_count ?? meta.clusterCount ?? "n/a";
+      const samples = meta.samples ?? state.payload.summary.songs;
+      const noisePoints = meta.noise_points ?? details.noisePoints;
+      const bits = [
+        `${clusterCount} clusters`,
+        `${formatWholeNumber(samples)} samples`,
+      ];
+      if (noisePoints !== undefined && noisePoints !== null) bits.push(`${formatWholeNumber(noisePoints)} noise`);
+      document.getElementById("algorithm-note").textContent = bits.join(" / ");
+      renderDashboardChrome();
+    }
+
+    function renderAlgorithmDetails() {
+      const root = document.getElementById("algorithm-details-grid");
+      root.innerHTML = state.payload.summary.availableAlgorithms.map(algorithm => {
+        const algorithmInfo = state.payload.algorithms[algorithm] || {};
+        const details = algorithmInfo.details || {};
+        const distribution = details.clusterDistribution || [];
+        const largestSize = Math.max(
+          ...distribution.filter(item => !item.isNoise).map(item => Number(item.size) || 0),
+          ...distribution.map(item => Number(item.size) || 0),
+          1
+        );
+
+        const statItems = [
+          { label: "Clusters", value: formatWholeNumber(details.clusterCount) },
+          { label: "Clustered Songs", value: formatWholeNumber(details.clusteredSongs) },
+          { label: "Noise Songs", value: formatWholeNumber(details.noisePoints || 0) },
+          { label: "Avg Cluster Size", value: formatDecimal(details.averageClusterSize, 1) },
+        ];
+
+        const metricMarkup = (details.metricCards || []).map(item => `
+          <div class="metric-chip">
+            <span class="metric-chip-label">${escapeHtml(item.label)}</span>
+            <span class="metric-chip-value">${escapeHtml(item.value)}</span>
+          </div>
+        `).join("");
+
+        const distributionMarkup = distribution.map(item => {
+          const width = Math.max(6, Math.min(100, ((Number(item.size) || 0) / largestSize) * 100));
+          return `
+            <div class="distribution-row ${item.isNoise ? "noise" : ""}">
+              <div class="distribution-meta">
+                <span class="distribution-label">${escapeHtml(distributionLabel(item))}</span>
+                <span class="distribution-size">${escapeHtml(formatWholeNumber(item.size))} songs · ${escapeHtml(formatPercent(item.ratio, 1))}</span>
+              </div>
+              <div class="distribution-bar">
+                <div class="distribution-bar-fill" style="width:${width}%"></div>
+              </div>
+            </div>
+          `;
+        }).join("");
+
+        const noteBits = [
+          `${formatWholeNumber(details.samples)} total songs`,
+          `${formatPercent(details.clusteredRatio, 1)} clustered`,
+        ];
+        if (details.largestCluster) {
+          noteBits.push(`largest ${distributionLabel(details.largestCluster)} with ${formatWholeNumber(details.largestCluster.size)} songs`);
+        }
+
+        return `
+          <article class="algorithm-detail-card ${algorithm === state.activeAlgorithm ? "active" : ""}" id="detail-card-${escapeHtml(algorithm)}">
+            <div class="algorithm-detail-head">
+              <div>
+                <div class="section-label">Model details</div>
+                <h3>${escapeHtml(algorithmLabels[algorithm] || algorithm)}</h3>
+                <div class="algorithm-detail-note">${escapeHtml(noteBits.join(" / "))}</div>
+              </div>
+              <button type="button" class="small-button secondary" data-activate-algorithm="${escapeHtml(algorithm)}">Use this</button>
+            </div>
+            <div class="detail-stat-grid">
+              ${statItems.map(item => `
+                <div class="detail-stat">
+                  <span class="detail-stat-label">${escapeHtml(item.label)}</span>
+                  <span class="detail-stat-value">${escapeHtml(item.value)}</span>
+                </div>
+              `).join("")}
+            </div>
+            <div class="metric-chip-grid">${metricMarkup}</div>
+            <div class="cluster-distribution-wrap">
+              <div class="cluster-distribution-head">
+                <span>${escapeHtml(algorithmLabels[algorithm] || algorithm)} cluster sizes</span>
+                <span>${escapeHtml(formatWholeNumber(distribution.length))} rows</span>
+              </div>
+              <div class="cluster-distribution-list">${distributionMarkup || `<div class="empty-state">No cluster distribution data.</div>`}</div>
+            </div>
+          </article>
+        `;
+      }).join("");
+
+      root.querySelectorAll("[data-activate-algorithm]").forEach(button => {
+        button.addEventListener("click", async event => {
+          await applySelection({
+            algorithm: event.currentTarget.getAttribute("data-activate-algorithm"),
+            refreshSongList: true,
+          });
+        });
+      });
+    }
+
+    function filterSongs() {
+      const query = document.getElementById("song-search").value.trim().toLowerCase();
+      const allIds = state.payload.listOrderSongIds;
+      if (!query) {
+        state.filteredSongIds = [...allIds];
+        return;
+      }
+      state.filteredSongIds = allIds.filter(songId => {
+        const song = state.songsById.get(songId);
+        const haystack = [
+          song.title, song.artist, song.album,
+          song.msdTitle, song.msdArtist, song.deezerTitle, song.deezerArtist,
+        ].join(" ").toLowerCase();
+        return haystack.includes(query);
+      });
+    }
+
+    function renderSongList() {
+      filterSongs();
+      const root = document.getElementById("song-list");
+      root.innerHTML = "";
+
+      if (!state.filteredSongIds.length) {
+        root.innerHTML = `<div class="empty-state">No songs match this search. Try an artist name, title fragment, album, or track id.</div>`;
+        document.getElementById("list-count").textContent = "0";
+        renderDashboardChrome();
+        return;
+      }
+
+      for (const songId of state.filteredSongIds) {
+        const song = state.songsById.get(songId);
+        const activeCluster = formatClusterLabel(state.activeAlgorithm, song.clusters[state.activeAlgorithm]);
+        const metaLine = [song.album, song.year].filter(Boolean).join(" / ") || "MSD and Deezer metadata";
+        const sourceLine = song.deezerLink ? "Deezer linked" : "Local features";
+        const item = document.createElement("button");
+        item.type = "button";
+        item.className = `song-item${song.id === state.selectedSongId ? " selected" : ""}`;
+        item.setAttribute("data-song-id", song.id);
+        item.setAttribute("aria-pressed", song.id === state.selectedSongId ? "true" : "false");
+        item.innerHTML = `
+          <div class="song-item-top">
+            <div class="song-item-artist">${escapeHtml(song.artist || "Unknown Artist")}</div>
+            <span class="mini-badge">${song.hasAudio ? "audio" : "metadata"}</span>
+          </div>
+          <div class="song-item-title">${escapeHtml(song.title || "Untitled")}</div>
+          <div class="song-item-meta">${escapeHtml(metaLine)}</div>
+          <div class="song-item-footer">
+            <span class="song-item-cluster">${escapeHtml(activeCluster)}</span>
+            <span class="song-item-source">${escapeHtml(sourceLine)}</span>
+          </div>
+        `;
+        item.addEventListener("click", async () => {
+          await applySelection({ songId: song.id });
+        });
+        root.appendChild(item);
+      }
+
+      document.getElementById("list-count").textContent = state.filteredSongIds.length.toLocaleString();
+      renderDashboardChrome();
+    }
+
+    function metadataLine(label, value) {
+      if (!value) return "";
+      return `
+        <div class="source-row">
+          <div class="source-label">${escapeHtml(label)}</div>
+          <div class="source-value">${value}</div>
+        </div>
+      `;
+    }
+
+    function clusterChipMarkup(song) {
+      return state.payload.summary.availableAlgorithms.map(algorithm => {
+        const info = song.clusters[algorithm];
+        const label = formatClusterLabel(algorithm, info);
+        return `
+          <span class="cluster-chip${algorithm === state.activeAlgorithm ? " active" : ""}">
+            <strong>${escapeHtml(algorithmLabels[algorithm] || algorithm)}</strong>
+            <span>${escapeHtml(label)}</span>
+          </span>
+        `;
+      }).join("");
+    }
+
+    function renderSelectedSong() {
+      const song = currentSong();
+      const root = document.getElementById("selected-song-card");
+      if (!song) {
+        root.innerHTML = `<div class="empty-state">Select a song from the library or click a point in the plots to open a focused listening view.</div>`;
+        renderDashboardChrome();
+        return;
+      }
+
+      const activeCluster = formatClusterLabel(state.activeAlgorithm, song.clusters[state.activeAlgorithm]);
+      const activeClusterSize = song.clusters[state.activeAlgorithm]?.clusterSize;
+      const subtitle = [song.artist || "Unknown Artist", song.album, song.year].filter(Boolean).join(" / ");
+      const focusStats = [
+        { label: "Active cluster", value: activeCluster },
+        { label: "Cluster size", value: activeClusterSize ? `${formatWholeNumber(activeClusterSize)} songs` : "Unavailable" },
+      ];
+      const metaChips = [
+        song.artist ? `<span class="meta-chip">${escapeHtml(song.artist)}</span>` : "",
+        song.album ? `<span class="meta-chip">${escapeHtml(song.album)}</span>` : "",
+        song.year ? `<span class="meta-chip">${escapeHtml(song.year)}</span>` : "",
+        song.hasAudio ? `<span class="meta-chip">Audio ready</span>` : `<span class="meta-chip">Metadata only</span>`,
+      ].filter(Boolean).join("");
+
+      root.innerHTML = `
+        <div class="selected-song-hero">
+          <div>
+            <div class="song-kicker">${escapeHtml(algorithmLabels[state.activeAlgorithm] || state.activeAlgorithm)} anchor</div>
+            <h2 class="song-title">${escapeHtml(song.title || "Untitled")}</h2>
+            <div class="song-subtitle">${escapeHtml(subtitle || "Song metadata is available below.")}</div>
+          </div>
+          <div class="song-focus-grid">
+            ${focusStats.map(item => `
+              <div class="focus-stat">
+                <span class="focus-label">${escapeHtml(item.label)}</span>
+                <span class="focus-value">${escapeHtml(item.value)}</span>
+              </div>
+            `).join("")}
+          </div>
+        </div>
+        <div class="song-meta">${metaChips}</div>
+        ${song.hasAudio ? `
+          <div class="song-player-wrap">
+            <audio id="selected-song-audio" controls preload="metadata">
+              <source src="${escapeHtml(song.audioUrl)}">
+            </audio>
+            <div id="selected-audio-status" class="algorithm-note">Loading audio preview...</div>
+          </div>
+        ` : `
+          <div class="song-player-wrap">
+            <div class="empty-state">No audio preview is available for this song.</div>
+          </div>
+        `}
+        <div class="cluster-list">${clusterChipMarkup(song)}</div>
+        <div class="source-grid">
+          ${metadataLine("MSD", escapeHtml([song.msdArtist, song.msdTitle].filter(Boolean).join(" - ")))}
+          ${metadataLine("Deezer", escapeHtml([song.deezerArtist, song.deezerTitle].filter(Boolean).join(" - ")))}
+          ${metadataLine("Album", escapeHtml(song.album))}
+          ${metadataLine("Track id", escapeHtml(song.id))}
+          ${metadataLine("Deezer link", song.deezerLink ? `<a href="${escapeHtml(song.deezerLink)}" target="_blank" rel="noreferrer">Open track page</a>` : "")}
+        </div>
+      `;
+
+      const audio = root.querySelector("#selected-song-audio");
+      const audioStatus = root.querySelector("#selected-audio-status");
+      if (audio) {
+        audio.addEventListener("loadedmetadata", () => {
+          if (audioStatus) audioStatus.textContent = "Audio ready. Press play to preview.";
+        }, { once: true });
+        audio.addEventListener("error", () => {
+          if (audioStatus) audioStatus.textContent = "Could not load this audio preview.";
+        }, { once: true });
+        audio.load();
+      }
+
+      renderDashboardChrome();
+    }
+
+    async function loadRecommendations() {
+      if (!state.selectedSongId) {
+        state.recommendations = [];
+        renderRecommendations();
+        renderDashboardChrome();
+        return;
+      }
+
+      document.getElementById("recommendations-meta").textContent = "Loading recommendations...";
+      const params = new URLSearchParams({
+        song_id: state.selectedSongId,
+        algorithm: state.activeAlgorithm,
+      });
+      const response = await fetch(`/api/recommendations?${params.toString()}`);
+      if (!response.ok) {
+        state.recommendations = [];
+        document.getElementById("recommendations-meta").textContent = "Could not load recommendations.";
+        renderRecommendations();
+        renderDashboardChrome();
+        return;
+      }
+
+      const payload = await response.json();
+      state.recommendations = payload.recommendations || [];
+      document.getElementById("recommendations-meta").textContent =
+        `${algorithmLabels[state.activeAlgorithm] || state.activeAlgorithm} prioritizes same-cluster matches, then nearest neighbors in feature space.`;
+      renderRecommendations();
+      drawPlots();
+      renderDashboardChrome();
+    }
+
+    function renderRecommendations() {
+      const root = document.getElementById("recommendation-list");
+      if (!state.recommendations.length) {
+        root.innerHTML = `<div class="empty-state">Recommendations appear after you select a song.</div>`;
+        return;
+      }
+
+      root.innerHTML = state.recommendations.map((song, index) => `
+        <article class="recommendation-card">
+          <div class="recommendation-rank">${String(index + 1).padStart(2, "0")}</div>
+          <div class="recommendation-body">
+            <div class="recommendation-head">
+              <div>
+                <h3 class="recommendation-title">${escapeHtml(song.title)}</h3>
+                <div class="recommendation-artist">${escapeHtml(song.artist)}</div>
+              </div>
+              <span class="score-chip strong">${escapeHtml(formatClusterLabel(state.activeAlgorithm, song.clusters[state.activeAlgorithm]))}</span>
+            </div>
+            <div class="recommendation-metrics">${escapeHtml(song.reason)}</div>
+            <div class="recommendation-score-row">
+              <span class="score-chip">${escapeHtml(song.sameActiveCluster ? "Same cluster" : "Nearest neighbor")}</span>
+              <span class="score-chip">${escapeHtml(song.agreementCount ? `${song.agreementCount} models agree` : "Driven by distance")}</span>
+              <span class="score-chip">${escapeHtml(`distance ${Number(song.distance).toFixed(3)}`)}</span>
+            </div>
+            <div class="recommendation-actions">
+              <button type="button" class="small-button" data-song-select="${escapeHtml(song.id)}">Make anchor</button>
+              ${song.hasAudio ? `<audio controls preload="none" src="${escapeHtml(song.audioUrl)}"></audio>` : `<button type="button" class="small-button secondary" disabled>No audio</button>`}
+            </div>
+          </div>
+        </article>
+      `).join("");
+
+      root.querySelectorAll("[data-song-select]").forEach(button => {
+        button.addEventListener("click", async event => {
+          await applySelection({ songId: event.currentTarget.getAttribute("data-song-select") });
+        });
+      });
+    }
+
+    function drawSinglePlot(algorithm) {
+      const canvas = state.canvases.get(algorithm);
+      if (!canvas) return;
+
+      const wrap = canvas.parentElement;
+      const dpr = window.devicePixelRatio || 1;
+      const width = Math.max(260, Math.floor(wrap.clientWidth * dpr));
+      const height = Math.max(280, Math.floor(canvas.clientHeight * dpr));
+      canvas.width = width;
+      canvas.height = height;
+
+      const ctx = canvas.getContext("2d");
+      ctx.clearRect(0, 0, width, height);
+      const background = ctx.createLinearGradient(0, 0, width, height);
+      background.addColorStop(0, "rgba(252, 249, 242, 0.98)");
+      background.addColorStop(1, "rgba(233, 244, 241, 0.96)");
+      ctx.fillStyle = background;
+      ctx.fillRect(0, 0, width, height);
+
+      const pad = projectionPadding(width, height);
+      ctx.strokeStyle = "rgba(31, 106, 93, 0.08)";
+      ctx.lineWidth = Math.max(1, dpr);
+      for (let step = 1; step < 4; step += 1) {
+        const x = pad + ((width - pad * 2) / 4) * step;
+        const y = pad + ((height - pad * 2) / 4) * step;
+        ctx.beginPath(); ctx.moveTo(x, pad); ctx.lineTo(x, height - pad); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(pad, y); ctx.lineTo(width - pad, y); ctx.stroke();
+      }
+
+      ctx.save();
+      ctx.setLineDash([6 * dpr, 8 * dpr]);
+      ctx.strokeStyle = "rgba(31, 106, 93, 0.13)";
+      ctx.beginPath(); ctx.moveTo(width / 2, pad); ctx.lineTo(width / 2, height - pad); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(pad, height / 2); ctx.lineTo(width - pad, height / 2); ctx.stroke();
+      ctx.restore();
+
+      const recommendationIds = new Set(state.recommendations.map(song => song.id));
+
+      for (const song of state.payload.songs) {
+        const point = projectionToCanvas(song.coords, width, height);
+        const info = song.clusters[algorithm];
+        const label = info ? info.label : null;
+        const radius = recommendationIds.has(song.id) ? 4.2 * dpr : 2.6 * dpr;
+        ctx.beginPath();
+        ctx.globalAlpha = recommendationIds.has(song.id) ? 0.9 : 0.72;
+        ctx.fillStyle = clusterColor(algorithm, label);
+        ctx.arc(point.x, point.y, radius, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+
+      for (const recommendedSong of state.recommendations) {
+        const point = projectionToCanvas(recommendedSong.coords, width, height);
+        ctx.save();
+        ctx.beginPath();
+        ctx.shadowBlur = 16 * dpr;
+        ctx.shadowColor = "rgba(217, 107, 60, 0.22)";
+        ctx.lineWidth = 2 * dpr;
+        ctx.strokeStyle = "rgba(217, 107, 60, 0.9)";
+        ctx.arc(point.x, point.y, 7 * dpr, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      const selectedSong = currentSong();
+      if (selectedSong) {
+        const point = projectionToCanvas(selectedSong.coords, width, height);
+        ctx.beginPath();
+        ctx.lineWidth = 3 * dpr;
+        ctx.strokeStyle = "rgba(15, 33, 31, 0.94)";
+        ctx.arc(point.x, point.y, 8.5 * dpr, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.fillStyle = "rgba(255, 255, 255, 0.96)";
+        ctx.arc(point.x, point.y, 4.6 * dpr, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.fillStyle = "rgba(15, 33, 31, 0.96)";
+        ctx.arc(point.x, point.y, 2.4 * dpr, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    function drawPlots() {
+      for (const algorithm of state.payload.summary.availableAlgorithms) {
+        drawSinglePlot(algorithm);
+        const card = document.getElementById(`plot-card-${algorithm}`);
+        if (card) {
+          card.classList.toggle("active", algorithm === state.activeAlgorithm);
+          const pill = card.querySelector(".plot-pill");
+          if (pill) pill.textContent = algorithm === state.activeAlgorithm ? "active" : "use model";
+        }
+        const detailCard = document.getElementById(`detail-card-${algorithm}`);
+        if (detailCard) detailCard.classList.toggle("active", algorithm === state.activeAlgorithm);
+      }
+    }
+
+    function nearestSongForEvent(canvas, event) {
+      const algorithm = canvas.getAttribute("data-algorithm");
+      const rect = canvas.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      const x = (event.clientX - rect.left) * dpr;
+      const y = (event.clientY - rect.top) * dpr;
+      let bestSong = null;
+      let bestDistance = Infinity;
+
+      for (const song of state.payload.songs) {
+        const point = projectionToCanvas(song.coords, canvas.width, canvas.height);
+        const distance = (point.x - x) ** 2 + (point.y - y) ** 2;
+        if (distance < bestDistance) {
+          bestDistance = distance;
+          bestSong = song;
+        }
+      }
+
+      const status = document.getElementById(`plot-status-${algorithm}`);
+      if (bestSong && bestDistance <= 13 * 13 * dpr * dpr) {
+        status.textContent = `${bestSong.artist} - ${bestSong.title}`;
+        return bestSong;
+      }
+      status.textContent = "";
+      return null;
+    }
+
+    function buildPlotGrid() {
+      const root = document.getElementById("plot-grid");
+      root.innerHTML = "";
+      state.canvases.clear();
+
+      for (const algorithm of state.payload.summary.availableAlgorithms) {
+        const algorithmMeta = state.payload.algorithms[algorithm] || {};
+        const metadata = algorithmMeta.metadata || {};
+        const details = algorithmMeta.details || {};
+        const clusterCount = metadata.cluster_count ?? metadata.clusterCount ?? "n/a";
+        const noisePoints = metadata.noise_points ?? details.noisePoints;
+        const subtitleBits = [`${clusterCount} clusters`, `${formatPercent(details.clusteredRatio, 0)} coverage`];
+        if (noisePoints !== undefined && noisePoints !== null) {
+          subtitleBits.push(`${formatWholeNumber(noisePoints)} noise`);
+        }
+
+        const card = document.createElement("article");
+        card.className = "plot-card";
+        card.id = `plot-card-${algorithm}`;
+        card.innerHTML = `
+          <div class="plot-header">
+            <div>
+              <div class="plot-overline">${escapeHtml(algorithm === state.activeAlgorithm ? "Live recommendation model" : "Comparison model")}</div>
+              <h3>${escapeHtml(algorithmLabels[algorithm] || algorithm)}</h3>
+              <div class="plot-subtitle">${escapeHtml(subtitleBits.join(" / "))}</div>
+            </div>
+            <button type="button" class="plot-pill">${escapeHtml(algorithm === state.activeAlgorithm ? "active" : "use model")}</button>
+          </div>
+          <div class="plot-canvas-wrap">
+            <canvas data-algorithm="${escapeHtml(algorithm)}"></canvas>
+          </div>
+          <div class="plot-card-footer">
+            <div class="plot-foot-note">Click points to inspect local neighborhoods.</div>
+            <div class="plot-status" id="plot-status-${escapeHtml(algorithm)}"></div>
+          </div>
+        `;
+        root.appendChild(card);
+
+        const canvas = card.querySelector("canvas");
+        state.canvases.set(algorithm, canvas);
+
+        card.querySelector(".plot-pill").addEventListener("click", async () => {
+          await applySelection({ algorithm, refreshSongList: true });
+        });
+
+        canvas.addEventListener("mousemove", event => {
+          nearestSongForEvent(canvas, event);
+        });
+        canvas.addEventListener("mouseleave", () => {
+          document.getElementById(`plot-status-${algorithm}`).textContent = "";
+        });
+        canvas.addEventListener("click", async event => {
+          const song = nearestSongForEvent(canvas, event);
+          if (!song) return;
+          await applySelection({ algorithm, songId: song.id, refreshSongList: true });
+        });
+      }
+    }
+
+    function syncSongList() {
+      const root = document.getElementById("song-list");
+      const visibleItem = root.querySelector(`[data-song-id="${state.selectedSongId}"]`);
+      if (!visibleItem) {
+        document.getElementById("song-search").value = "";
+        renderSongList();
+        return;
+      }
+      root.querySelectorAll(".song-item").forEach(el => {
+        const isSelected = el.getAttribute("data-song-id") === state.selectedSongId;
+        el.classList.toggle("selected", isSelected);
+        el.setAttribute("aria-pressed", isSelected ? "true" : "false");
+      });
+      visibleItem.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }
+
+    function bindEvents() {
+      const searchInput = document.getElementById("song-search");
+      searchInput.addEventListener("input", () => {
+        renderSongList();
+      });
+      searchInput.addEventListener("keydown", event => {
+        if (event.key === "Escape" && searchInput.value) {
+          searchInput.value = "";
+          renderSongList();
+        }
+      });
+      window.addEventListener("resize", () => {
+        drawPlots();
+      });
+    }
+
+    async function boot() {
+      try {
+        await fetchState();
+        enhanceLayoutSkeleton();
+        renderHeroStats();
+        renderAlgorithmButtons();
+        renderAlgorithmNote();
+        renderSongList();
+        buildPlotGrid();
+        renderAlgorithmDetails();
+        bindEvents();
+        syncSongList();
+        renderSelectedSong();
+        await loadRecommendations();
+        drawPlots();
+      } catch (error) {
+        document.body.innerHTML = `
+          <main style="padding:40px;font-family:sans-serif;color:#16342e;">
+            <div style="max-width:480px;margin:80px auto;padding:28px;border-radius:16px;background:rgba(255,255,255,0.9);border:1px solid rgba(23,106,88,0.14);">
+              <div style="font-size:0.72rem;font-family:monospace;text-transform:uppercase;letter-spacing:0.08em;color:#5d756d;margin-bottom:8px;">Interface Error</div>
+              <h2 style="margin:0 0 12px;font-size:1.3rem;">Could not start the cluster explorer</h2>
+              <p style="margin:0;font-size:0.9rem;color:#5d756d;">${escapeHtml(error.message || String(error))}</p>
+            </div>
+          </main>
+        `;
+      }
+    }
+
+    boot();
+  </script>
+</body>
+</html>
