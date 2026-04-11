@@ -179,7 +179,8 @@ class AudioPreprocessor:
             return {"total": 0}
 
         if max_workers is None:
-            max_workers = min(cpu_count(), 8)
+            default_cap = int(os.environ.get("MAX_WORKERS", 16))
+            max_workers = min(cpu_count(), default_cap)
 
         stats = {
             "total": len(files),
