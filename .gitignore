@@ -18,7 +18,6 @@ venv/
 /msd_deezer_workspace/cluster_results/
 /msd_deezer_workspace/features/raw/
 /msd_deezer_workspace/features/feature_vectors.csv
-/msd_deezer_workspace/data/msd_deezer_matches.csv
 /msd_deezer_workspace/data/*.tmp
 /msd_deezer_workspace/data/*.pending.csv
 /calendar/
