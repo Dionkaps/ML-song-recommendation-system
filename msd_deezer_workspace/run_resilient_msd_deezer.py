@@ -240,12 +240,15 @@ def main() -> None:
 
     if not source_script.exists():
         raise FileNotFoundError(f"Pipeline script not found: {source_script}")
-    if not subset_dir.exists():
-        raise FileNotFoundError(f"Subset directory not found: {subset_dir}")
 
     csv_progress = load_csv_progress(csv_path) if csv_path.exists() else {"total": 0}
     total_catalog_rows = int(csv_progress.get("total", 0) or 0)
     if total_catalog_rows <= 0:
+        if not subset_dir.exists():
+            raise FileNotFoundError(
+                f"No CSV found at {csv_path} and subset directory not found at {subset_dir}. "
+                "Either provide a pre-built CSV or a valid --subset-dir."
+            )
         total_catalog_rows = count_subset_rows(subset_dir)
 
     forced_restart_count = 0
