@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import csv
 import json
 import math
 import os
 import re
+import sys
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -185,8 +188,76 @@ def join_tag_counts(tags: Any, counts: Any) -> str:
 
 def progress(iterable: Any, total: int | None = None, desc: str = "") -> Any:
     if tqdm is not None:
-        return tqdm(iterable, total=total, desc=desc, unit="song")
+        return tqdm(iterable, total=total, desc=desc, unit="song", file=sys.stderr, dynamic_ncols=True)
     return iterable
+
+
+class RateLimiter:
+    """Throttle concurrent workers to a maximum songs-per-second rate."""
+
+    def __init__(self, max_per_sec: float):
+        self._min_interval = 1.0 / max_per_sec if max_per_sec > 0 else 0.0
+        self._lock = threading.Lock()
+        self._last = 0.0
+
+    def acquire(self) -> None:
+        if self._min_interval <= 0:
+            return
+        with self._lock:
+            now = time.time()
+            wait = self._last + self._min_interval - now
+            if wait > 0:
+                time.sleep(wait)
+            self._last = time.time()
+
+
+_thread_local = threading.local()
+
+
+def _get_thread_session() -> "requests.Session":
+    if not hasattr(_thread_local, "session"):
+        _thread_local.session = build_session()
+    return _thread_local.session
+
+
+def _fmt_duration(seconds: float) -> str:
+    seconds = int(seconds)
+    if seconds < 60:
+        return f"{seconds}s"
+    minutes, secs = divmod(seconds, 60)
+    if minutes < 60:
+        return f"{minutes}m{secs:02d}s"
+    hours, mins = divmod(minutes, 60)
+    return f"{hours}h{mins:02d}m{secs:02d}s"
+
+
+def log_info(message: str) -> None:
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[{timestamp}] {message}", flush=True)
+
+
+def _log_progress(
+    attempt: int,
+    processed_in_attempt: int,
+    total_in_attempt: int,
+    session_start_time: float,
+    final_outcomes: dict[int, str],
+    total_selected: int,
+) -> None:
+    elapsed = time.time() - session_start_time
+    rate = len(final_outcomes) / elapsed if elapsed > 0 else 0
+    downloaded = sum(1 for o in final_outcomes.values() if o == "downloaded")
+    no_match = sum(1 for o in final_outcomes.values() if o == "no_match")
+    failed = sum(1 for o in final_outcomes.values() if o == "download_failed")
+    errors = sum(1 for o in final_outcomes.values() if o == "search_error")
+    remaining = total_selected - len(final_outcomes)
+    eta = remaining / rate if rate > 0 else 0
+    log_info(
+        f"PROGRESS | attempt {attempt}: {processed_in_attempt}/{total_in_attempt} | "
+        f"session elapsed: {_fmt_duration(elapsed)} | {rate:.2f} songs/s | "
+        f"downloaded={downloaded} no_match={no_match} failed={failed} errors={errors} "
+        f"(of {total_selected} total) | ETA {_fmt_duration(eta)}"
+    )
 
 
 def atomic_write_rows(rows: list[dict[str, str]], csv_path: Path) -> None:
@@ -869,6 +940,8 @@ def match_and_download(
     request_delay: float,
     retry_no_match: bool,
     redownload_existing: bool,
+    workers: int = 1,
+    max_songs_per_sec: float = 0.0,
 ) -> dict[str, int]:
     if not rows:
         return {
@@ -881,7 +954,6 @@ def match_and_download(
             "skipped_no_match": 0,
         }
 
-    session = build_session()
     search_cache = load_search_cache(cache_path)
     stats = {
         "attempted": 0,
@@ -913,58 +985,130 @@ def match_and_download(
     if not selected_indices:
         return stats
 
+    rate_limiter = RateLimiter(max_songs_per_sec)
+    use_concurrent = workers > 1
+    session_start_time = time.time()
+
+    log_info(
+        f"SESSION START | songs={len(selected_indices)} | workers={workers} | "
+        f"max_songs_per_sec={max_songs_per_sec or 'unlimited'} | "
+        f"skipped_downloaded={stats['skipped_downloaded']} | skipped_no_match={stats['skipped_no_match']}"
+    )
+
+    def _process_one(row_index: int) -> tuple[int, str]:
+        rate_limiter.acquire()
+        session = _get_thread_session()
+        return row_index, process_match_row(
+            row=rows[row_index],
+            session=session,
+            search_cache=search_cache,
+            audio_dir=audio_dir,
+            csv_path=csv_path,
+        )
+
+    def _handle_result(
+        row_index: int,
+        outcome: str,
+        attempt: int,
+        processed_in_attempt: int,
+        total_in_attempt: int,
+    ) -> None:
+        nonlocal processed_since_save
+        final_outcomes[row_index] = outcome
+        processed_since_save += 1
+        if processed_since_save >= max(1, save_every):
+            atomic_write_rows(rows, csv_path)
+            save_search_cache(cache_path, search_cache)
+            processed_since_save = 0
+            _log_progress(
+                attempt, processed_in_attempt, total_in_attempt,
+                session_start_time, final_outcomes, len(selected_indices),
+            )
+
     try:
         attempt = 1
         pending_indices = list(selected_indices)
 
         while pending_indices:
             if attempt > 1:
-                print(f"\nRetry attempt {attempt - 1}: retrying {len(pending_indices)} failed song(s).")
+                log_info(f"RETRY | attempt={attempt} | songs={len(pending_indices)}")
 
             completed_in_attempt = 0
             failed_indices_this_attempt: list[int] = []
-            iterator = progress(
-                pending_indices,
-                total=len(pending_indices),
-                desc=f"Matching on Deezer (attempt {attempt})",
-            )
+            processed_in_attempt = 0
+            attempt_start = time.time()
 
-            for row_index in iterator:
-                row = rows[row_index]
-                outcome = process_match_row(
-                    row=row,
-                    session=session,
-                    search_cache=search_cache,
-                    audio_dir=audio_dir,
-                    csv_path=csv_path,
+            if use_concurrent:
+                pbar = None
+                if tqdm is not None:
+                    pbar = tqdm(
+                        total=len(pending_indices),
+                        desc=f"Matching on Deezer (attempt {attempt})",
+                        unit="song",
+                        file=sys.stderr,
+                        dynamic_ncols=True,
+                    )
+                with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+                    futures = {executor.submit(_process_one, idx): idx for idx in pending_indices}
+                    for future in concurrent.futures.as_completed(futures):
+                        try:
+                            row_index, outcome = future.result()
+                        except Exception as exc:
+                            row_index = futures[future]
+                            outcome = "search_error"
+                            rows[row_index]["deezer_match_status"] = "search_error"
+                            rows[row_index]["deezer_error"] = str(exc)[:500]
+                            rows[row_index]["deezer_last_processed_utc"] = utc_now_iso()
+
+                        if outcome == "downloaded":
+                            completed_in_attempt += 1
+                        else:
+                            failed_indices_this_attempt.append(row_index)
+
+                        processed_in_attempt += 1
+                        _handle_result(
+                            row_index, outcome, attempt,
+                            processed_in_attempt, len(pending_indices),
+                        )
+                        if pbar is not None:
+                            pbar.update(1)
+
+                if pbar is not None:
+                    pbar.close()
+            else:
+                iterator = progress(
+                    pending_indices,
+                    total=len(pending_indices),
+                    desc=f"Matching on Deezer (attempt {attempt})",
                 )
-                final_outcomes[row_index] = outcome
+                for row_index in iterator:
+                    _, outcome = _process_one(row_index)
+                    if outcome == "downloaded":
+                        completed_in_attempt += 1
+                    else:
+                        failed_indices_this_attempt.append(row_index)
 
-                if outcome == "downloaded":
-                    completed_in_attempt += 1
-                else:
-                    failed_indices_this_attempt.append(row_index)
+                    processed_in_attempt += 1
+                    _handle_result(
+                        row_index, outcome, attempt,
+                        processed_in_attempt, len(pending_indices),
+                    )
 
-                processed_since_save += 1
-                if processed_since_save >= max(1, save_every):
-                    atomic_write_rows(rows, csv_path)
-                    save_search_cache(cache_path, search_cache)
-                    processed_since_save = 0
+                    if request_delay > 0 and max_songs_per_sec <= 0:
+                        time.sleep(request_delay)
 
-                if request_delay > 0:
-                    time.sleep(request_delay)
-
-            print(
-                f"Attempt {attempt} complete: {completed_in_attempt} success, "
-                f"{len(failed_indices_this_attempt)} failed"
+            attempt_duration = time.time() - attempt_start
+            log_info(
+                f"ATTEMPT DONE | attempt={attempt} | success={completed_in_attempt} | "
+                f"failed={len(failed_indices_this_attempt)} | duration={_fmt_duration(attempt_duration)}"
             )
 
             if not failed_indices_this_attempt:
-                print("All songs in this session completed successfully.")
+                log_info("All songs in this session completed successfully.")
                 break
 
             if completed_in_attempt == 0:
-                print("No successful downloads in this attempt - stopping retries.")
+                log_info("No successful downloads in this attempt - stopping retries.")
                 break
 
             attempt += 1
@@ -973,7 +1117,7 @@ def match_and_download(
                 SESSION_RETRY_BASE_DELAY_SEC * (2 ** (attempt - 2)),
                 SESSION_RETRY_MAX_DELAY_SEC,
             )
-            print(f"Waiting {backoff_time:.0f} seconds before retry...\n")
+            log_info(f"Waiting {backoff_time:.0f}s before retry...")
             time.sleep(backoff_time)
     finally:
         atomic_write_rows(rows, csv_path)
@@ -984,6 +1128,15 @@ def match_and_download(
     stats["no_match"] = sum(1 for outcome in final_outcomes.values() if outcome == "no_match")
     stats["download_failed"] = sum(1 for outcome in final_outcomes.values() if outcome == "download_failed")
     stats["search_errors"] = sum(1 for outcome in final_outcomes.values() if outcome == "search_error")
+
+    elapsed = time.time() - session_start_time
+    rate = stats["attempted"] / elapsed if elapsed > 0 else 0
+    log_info(
+        f"SESSION DONE | elapsed={_fmt_duration(elapsed)} | attempted={stats['attempted']} | "
+        f"downloaded={stats['downloaded']} | no_match={stats['no_match']} | "
+        f"failed={stats['download_failed']} | errors={stats['search_errors']} | "
+        f"rate={rate:.2f} songs/s"
+    )
 
     return stats
 
@@ -1006,7 +1159,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--start-index", type=int, default=0, help="CSV row index to start Deezer matching from.")
     parser.add_argument("--limit", type=int, help="Maximum number of non-skipped songs to attempt during the Deezer stage.")
     parser.add_argument("--save-every", type=int, default=25, help="Persist the CSV and cache after this many attempts.")
-    parser.add_argument("--request-delay", type=float, default=0.35, help="Delay between Deezer attempts in seconds.")
+    parser.add_argument("--request-delay", type=float, default=0.35, help="Delay between Deezer attempts in seconds (single-worker mode).")
+    parser.add_argument("--workers", type=int, default=1, help="Number of concurrent download threads (default: 1).")
+    parser.add_argument("--max-songs-per-sec", type=float, default=0.0, help="Rate-limit cap on songs processed per second across all workers (0 = unlimited).")
     parser.add_argument(
         "--retry-no-match",
         action="store_true",
@@ -1034,18 +1189,22 @@ def main() -> int:
         rows = load_csv_rows(csv_path)
         if not rows:
             raise FileNotFoundError(f"CSV not found or empty: {csv_path}")
+        log_info(f"LOAD CSV | rows={len(rows)} | path={csv_path}")
     else:
+        extract_start = time.time()
         rows, extraction_errors = extract_metadata_csv(
             subset_dir=subset_dir,
             csv_path=csv_path,
             preserve_existing=not args.force_rebuild_csv,
         )
-        print(f"Metadata CSV written to: {csv_path}")
-        print(f"Extracted rows: {len(rows)}")
+        extract_elapsed = time.time() - extract_start
+        log_info(
+            f"EXTRACT DONE | rows={len(rows)} | errors={len(extraction_errors)} | "
+            f"duration={_fmt_duration(extract_elapsed)} | path={csv_path}"
+        )
         if extraction_errors:
-            print(f"Extraction errors: {len(extraction_errors)}")
             for message in extraction_errors[:10]:
-                print(f"  - {message}")
+                log_info(f"EXTRACT ERROR | {message}")
 
     if args.extract_only:
         return 0
@@ -1061,13 +1220,12 @@ def main() -> int:
         request_delay=max(0.0, args.request_delay),
         retry_no_match=args.retry_no_match,
         redownload_existing=args.redownload_existing,
+        workers=max(1, args.workers),
+        max_songs_per_sec=max(0.0, args.max_songs_per_sec),
     )
 
-    print(f"Updated CSV: {csv_path}")
-    print(f"Audio folder: {audio_dir}")
-    print("Deezer stage summary:")
-    for key, value in stats.items():
-        print(f"  {key}: {value}")
+    log_info(f"Updated CSV: {csv_path}")
+    log_info(f"Audio folder: {audio_dir}")
 
     return 0
 

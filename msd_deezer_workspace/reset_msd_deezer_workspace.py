@@ -6,13 +6,6 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-try:
-    import tkinter as tk
-    from tkinter import messagebox
-except ImportError:  # pragma: no cover
-    tk = None
-    messagebox = None
-
 
 WORKSPACE_DIR = Path(__file__).resolve().parent
 DEFAULT_DATA_DIR = WORKSPACE_DIR / "data"
@@ -223,135 +216,45 @@ def select_groups_cli(groups: list[CleanupGroup], requested_keys: list[str] | No
     return selected
 
 
-def select_groups_gui(groups: list[CleanupGroup], dry_run: bool) -> list[CleanupGroup] | None:
-    if tk is None:
+def select_groups_terminal(groups: list[CleanupGroup]) -> list[CleanupGroup] | None:
+    print("\nAvailable cleanup targets:\n")
+    for index, group in enumerate(groups, 1):
+        print(f"  [{index}] {group.title} -- {group.item_count} path(s), {human_size(group.total_bytes)}")
+        print(f"      {group.description}")
+        for path in group.existing_paths[:3]:
+            print(f"        {path}")
+        remaining = group.item_count - min(3, group.item_count)
+        if remaining > 0:
+            print(f"        ... and {remaining} more path(s)")
+        print()
+
+    print("Enter numbers to delete (e.g. 1,3), 'all' for everything, or 'q' to cancel.")
+    try:
+        choice = input("> ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print()
         return None
 
-    root = tk.Tk()
-    root.title("Reset MSD Deezer Workspace")
-    root.geometry("760x520")
-    root.minsize(680, 420)
-    root.resizable(True, True)
+    if not choice or choice == "q":
+        return None
 
-    result: dict[str, list[CleanupGroup] | None] = {"selection": None}
-    variables: dict[str, tk.BooleanVar] = {
-        group.key: tk.BooleanVar(value=True) for group in groups
-    }
-    select_all_var = tk.BooleanVar(value=True)
+    if choice == "all":
+        return groups
 
-    def sync_select_all(*_: object) -> None:
-        all_checked = all(var.get() for var in variables.values()) if variables else False
-        if select_all_var.get() != all_checked:
-            select_all_var.set(all_checked)
+    selected: list[CleanupGroup] = []
+    for token in choice.replace(",", " ").split():
+        try:
+            idx = int(token)
+        except ValueError:
+            print(f"Ignoring invalid input: {token}")
+            continue
+        if 1 <= idx <= len(groups):
+            if groups[idx - 1] not in selected:
+                selected.append(groups[idx - 1])
+        else:
+            print(f"Ignoring out-of-range number: {idx}")
 
-    def on_toggle_all() -> None:
-        target_value = select_all_var.get()
-        for var in variables.values():
-            var.set(target_value)
-
-    def on_confirm() -> None:
-        selected = [group for group in groups if variables[group.key].get()]
-        if not selected:
-            if messagebox is not None:
-                messagebox.showwarning("Nothing selected", "Choose at least one cleanup target.")
-            return
-        result["selection"] = selected
-        root.destroy()
-
-    def on_cancel() -> None:
-        result["selection"] = None
-        root.destroy()
-
-    for var in variables.values():
-        var.trace_add("write", sync_select_all)
-
-    container = tk.Frame(root, padx=14, pady=14)
-    container.pack(fill="both", expand=True)
-
-    heading = "Choose which generated artifacts to remove"
-    if dry_run:
-        heading += " (dry run)"
-    tk.Label(container, text=heading, font=("Segoe UI", 14, "bold")).pack(anchor="w")
-    tk.Label(
-        container,
-        text="Only existing generated outputs are listed below. Select all or pick specific groups.",
-        wraplength=710,
-        justify="left",
-    ).pack(anchor="w", pady=(6, 12))
-
-    select_all_row = tk.Frame(container)
-    select_all_row.pack(fill="x", pady=(0, 8))
-    tk.Checkbutton(
-        select_all_row,
-        text="Select all",
-        variable=select_all_var,
-        command=on_toggle_all,
-        font=("Segoe UI", 10, "bold"),
-    ).pack(anchor="w")
-
-    list_frame = tk.Frame(container)
-    list_frame.pack(fill="both", expand=True)
-
-    canvas = tk.Canvas(list_frame, borderwidth=0, highlightthickness=0)
-    scrollbar = tk.Scrollbar(list_frame, orient="vertical", command=canvas.yview)
-    content = tk.Frame(canvas)
-
-    content.bind(
-        "<Configure>",
-        lambda event: canvas.configure(scrollregion=canvas.bbox("all")),
-    )
-    canvas.create_window((0, 0), window=content, anchor="nw")
-    canvas.configure(yscrollcommand=scrollbar.set)
-
-    canvas.pack(side="left", fill="both", expand=True)
-    scrollbar.pack(side="right", fill="y")
-
-    for group in groups:
-        row = tk.Frame(content, padx=8, pady=8, bd=1, relief="groove")
-        row.pack(fill="x", pady=(0, 8))
-
-        label = f"{group.title} ({group.item_count} path(s), {human_size(group.total_bytes)})"
-        tk.Checkbutton(
-            row,
-            text=label,
-            variable=variables[group.key],
-            anchor="w",
-            justify="left",
-            wraplength=650,
-            font=("Segoe UI", 10, "bold"),
-        ).pack(anchor="w")
-
-        tk.Label(
-            row,
-            text=group.description,
-            anchor="w",
-            justify="left",
-            wraplength=670,
-            fg="#444444",
-        ).pack(anchor="w", pady=(2, 4))
-
-        preview_paths = list(group.existing_paths[:3])
-        preview_text = "\n".join(str(path) for path in preview_paths)
-        remaining = group.item_count - len(preview_paths)
-        if remaining > 0:
-            preview_text += f"\n... and {remaining} more path(s)"
-        tk.Label(
-            row,
-            text=preview_text,
-            anchor="w",
-            justify="left",
-            wraplength=670,
-            fg="#1f1f1f",
-        ).pack(anchor="w")
-
-    button_row = tk.Frame(container)
-    button_row.pack(fill="x", pady=(12, 0))
-    tk.Button(button_row, text="Cancel", width=12, command=on_cancel).pack(side="right", padx=(8, 0))
-    tk.Button(button_row, text="Delete selected", width=14, command=on_confirm).pack(side="right")
-
-    root.protocol("WM_DELETE_WINDOW", on_cancel)
-    root.mainloop()
-    return result["selection"]
+    return selected if selected else None
 
 
 def parse_args() -> argparse.Namespace:
@@ -367,11 +270,6 @@ def parse_args() -> argparse.Namespace:
         "--list",
         action="store_true",
         help="List the generated artifact groups that currently exist and exit.",
-    )
-    parser.add_argument(
-        "--no-gui",
-        action="store_true",
-        help="Skip the checkbox popup and use terminal selection instead.",
     )
     parser.add_argument(
         "--all",
@@ -403,15 +301,11 @@ def main() -> int:
         selected_groups = groups
     elif args.targets:
         selected_groups = select_groups_cli(groups, args.targets)
-    elif not args.no_gui:
-        selected_groups = select_groups_gui(groups, dry_run=args.dry_run)
+    else:
+        selected_groups = select_groups_terminal(groups)
         if selected_groups is None:
             print("Reset cancelled.")
             return 1
-    else:
-        print_group_summary(groups)
-        print("\nNo GUI requested, so all listed groups will be selected.")
-        selected_groups = groups
 
     if not selected_groups:
         print("Nothing selected.")

@@ -40,7 +40,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-no-progress-sessions", type=int, default=2, help="Stop after this many completed sessions with no new CSV/audio progress.")
     parser.add_argument("--max-sessions", type=int, default=0, help="Optional hard cap on how many subprocess sessions to run. Use 1 for a tiny smoke test.")
     parser.add_argument("--save-every", type=int, default=25, help="Persist the CSV and cache after this many attempts inside the pipeline.")
-    parser.add_argument("--request-delay", type=float, default=0.35, help="Delay between Deezer attempts inside the pipeline.")
+    parser.add_argument("--request-delay", type=float, default=0.35, help="Delay between Deezer attempts inside the pipeline (single-worker mode).")
+    parser.add_argument("--workers", type=int, default=1, help="Number of concurrent download threads inside the pipeline.")
+    parser.add_argument("--max-songs-per-sec", type=float, default=0.0, help="Rate-limit cap on songs/sec (0 = unlimited).")
     parser.add_argument("--retry-no-match", action="store_true", help="Pass through retry-no-match to the pipeline.")
     parser.add_argument("--redownload-existing", action="store_true", help="Pass through redownload-existing to the pipeline.")
     parser.add_argument("--log-dir", default="", help="Optional directory for per-session logs and the run summary.")
@@ -210,6 +212,10 @@ def build_command(
         str(max(1, int(args.save_every))),
         "--request-delay",
         str(max(0.0, float(args.request_delay))),
+        "--workers",
+        str(max(1, int(args.workers))),
+        "--max-songs-per-sec",
+        str(max(0.0, float(args.max_songs_per_sec))),
     ]
 
     if csv_path.exists():
@@ -310,7 +316,7 @@ def main() -> None:
             command,
             cwd=str(PROJECT_ROOT),
             stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
+            stderr=None,
             text=True,
             bufsize=1,
             encoding="utf-8",
