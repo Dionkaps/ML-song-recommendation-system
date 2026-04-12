@@ -36,10 +36,7 @@ PREVIEW_TIMEOUT_SEC = 20
 SEARCH_RESULT_LIMIT = 8
 MAX_AUDIO_FILENAME_LENGTH = 180
 DOWNLOAD_RETRY_ATTEMPTS = 4
-DOWNLOAD_RETRY_BASE_DELAY_SEC = 2.0
-DOWNLOAD_RETRY_MAX_DELAY_SEC = 20.0
-SESSION_RETRY_BASE_DELAY_SEC = 5.0
-SESSION_RETRY_MAX_DELAY_SEC = 60.0
+RETRY_DELAY_SEC = 15.0
 CSV_WRITE_RETRY_ATTEMPTS = 12
 CSV_WRITE_RETRY_BASE_DELAY_SEC = 0.25
 CSV_WRITE_RETRY_MAX_DELAY_SEC = 3.0
@@ -521,7 +518,6 @@ def get_json(
     timeout: int = SEARCH_TIMEOUT_SEC,
     max_retries: int = 3,
 ) -> tuple[Any | None, str | None]:
-    backoff = 1.0
     last_error = None
 
     for attempt in range(max_retries):
@@ -530,8 +526,7 @@ def get_json(
         except requests.RequestException as exc:
             last_error = str(exc)
             if attempt + 1 < max_retries:
-                time.sleep(backoff)
-                backoff *= 2
+                time.sleep(RETRY_DELAY_SEC)
                 continue
             return None, last_error
 
@@ -543,8 +538,7 @@ def get_json(
 
         last_error = f"HTTP {response.status_code}"
         if response.status_code in {429, 500, 502, 503, 504} and attempt + 1 < max_retries:
-            time.sleep(backoff)
-            backoff *= 2
+            time.sleep(RETRY_DELAY_SEC)
             continue
 
         snippet = response.text[:200].replace("\n", " ").strip()
@@ -599,6 +593,7 @@ def search_song(
     had_successful_query = False
     query_errors: list[str] = []
     candidates: dict[str, dict[str, Any]] = {}
+    confident_match: dict[str, Any] | None = None
 
     for query in build_search_queries(song_name, artist_name):
         results, error = run_search_query(session, query)
@@ -614,7 +609,15 @@ def search_song(
             metrics = score_candidate(song_name, artist_name, expected_duration, candidate)
             existing = candidates.get(track_id)
             if existing is None or metrics["score"] > existing["metrics"]["score"]:
-                candidates[track_id] = {"song": candidate, "metrics": metrics, "query": query}
+                entry = {"song": candidate, "metrics": metrics, "query": query}
+                candidates[track_id] = entry
+                if is_confident_candidate(metrics, artist_name):
+                    if confident_match is None or metrics["score"] > confident_match["metrics"]["score"]:
+                        confident_match = entry
+
+        if confident_match is not None:
+            search_cache[cache_key] = {"track_id": confident_match["song"].get("id")}
+            return confident_match, None
 
     if not candidates:
         if not had_successful_query and query_errors:
@@ -700,11 +703,7 @@ def ensure_preview_download(
                 last_error = "Missing Deezer preview URL after refresh"
 
         if attempt < DOWNLOAD_RETRY_ATTEMPTS:
-            delay = min(
-                DOWNLOAD_RETRY_BASE_DELAY_SEC * (2 ** (attempt - 1)),
-                DOWNLOAD_RETRY_MAX_DELAY_SEC,
-            )
-            time.sleep(delay)
+            time.sleep(RETRY_DELAY_SEC)
 
     return False, f"Download failed after {DOWNLOAD_RETRY_ATTEMPTS} attempts: {last_error}", current_song
 
@@ -1113,12 +1112,8 @@ def match_and_download(
 
             attempt += 1
             pending_indices = failed_indices_this_attempt
-            backoff_time = min(
-                SESSION_RETRY_BASE_DELAY_SEC * (2 ** (attempt - 2)),
-                SESSION_RETRY_MAX_DELAY_SEC,
-            )
-            log_info(f"Waiting {backoff_time:.0f}s before retry...")
-            time.sleep(backoff_time)
+            log_info(f"Waiting {RETRY_DELAY_SEC:.0f}s before retry...")
+            time.sleep(RETRY_DELAY_SEC)
     finally:
         atomic_write_rows(rows, csv_path)
         save_search_cache(cache_path, search_cache)
@@ -1159,9 +1154,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--start-index", type=int, default=0, help="CSV row index to start Deezer matching from.")
     parser.add_argument("--limit", type=int, help="Maximum number of non-skipped songs to attempt during the Deezer stage.")
     parser.add_argument("--save-every", type=int, default=25, help="Persist the CSV and cache after this many attempts.")
-    parser.add_argument("--request-delay", type=float, default=0.35, help="Delay between Deezer attempts in seconds (single-worker mode).")
-    parser.add_argument("--workers", type=int, default=1, help="Number of concurrent download threads (default: 1).")
-    parser.add_argument("--max-songs-per-sec", type=float, default=0.0, help="Rate-limit cap on songs processed per second across all workers (0 = unlimited).")
+    parser.add_argument("--request-delay", type=float, default=0.0, help="Delay between Deezer attempts in seconds (single-worker mode, 0 when using rate limiter).")
+    parser.add_argument("--workers", type=int, default=3, help="Number of concurrent download threads (default: 3).")
+    parser.add_argument("--max-songs-per-sec", type=float, default=3.0, help="Rate-limit cap on songs processed per second across all workers (0 = unlimited).")
     parser.add_argument(
         "--retry-no-match",
         action="store_true",
