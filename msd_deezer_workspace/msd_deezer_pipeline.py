@@ -31,14 +31,12 @@ DEFAULT_CACHE_PATH = SCRIPT_DIR / "cache" / "deezer_search_cache.json"
 
 DEEZE_SEARCH_URL = "https://api.deezer.com/search/track"
 DEEZE_TRACK_URL = "https://api.deezer.com/track/{}"
-SEARCH_TIMEOUT_SEC = 10
+SEARCH_TIMEOUT_SEC = 15
 PREVIEW_TIMEOUT_SEC = 20
 SEARCH_RESULT_LIMIT = 8
 MAX_AUDIO_FILENAME_LENGTH = 180
-DOWNLOAD_RETRY_ATTEMPTS = 3
-RETRY_DELAY_SEC = 5.0
-RATE_LIMIT_BACKOFF_SEC = 15.0
-DOWNLOAD_WORKERS_FACTOR = 2
+DOWNLOAD_RETRY_ATTEMPTS = 4
+RETRY_DELAY_SEC = 15.0
 CSV_WRITE_RETRY_ATTEMPTS = 12
 CSV_WRITE_RETRY_BASE_DELAY_SEC = 0.25
 CSV_WRITE_RETRY_MAX_DELAY_SEC = 3.0
@@ -191,62 +189,23 @@ def progress(iterable: Any, total: int | None = None, desc: str = "") -> Any:
     return iterable
 
 
-class AdaptiveRateLimiter:
-    """Thread-safe rate limiter that adapts to API 429 responses.
+class RateLimiter:
+    """Throttle concurrent workers to a maximum songs-per-second rate."""
 
-    Starts at *initial_rate* req/s, ramps up slowly on sustained success,
-    and halves immediately (debounced) when a 429 quota error is received.
-    Pass *initial_rate=0* to disable limiting entirely.
-    """
-
-    def __init__(self, initial_rate: float, min_rate: float = 1.0, max_rate: float = 0.0):
+    def __init__(self, max_per_sec: float):
+        self._min_interval = 1.0 / max_per_sec if max_per_sec > 0 else 0.0
         self._lock = threading.Lock()
-        self._last_request = 0.0
-        self._last_reduction = 0.0
-        self._consecutive_successes = 0
-        self._min_rate = max(0.1, min_rate)
-        self._max_rate = max_rate if max_rate > 0 else float("inf")
-        if initial_rate <= 0:
-            self._rate = float("inf")
-        else:
-            self._rate = float(initial_rate)
-
-    @property
-    def current_rate(self) -> float:
-        return self._rate
+        self._last = 0.0
 
     def acquire(self) -> None:
-        if self._rate == float("inf"):
+        if self._min_interval <= 0:
             return
         with self._lock:
-            interval = 1.0 / self._rate
             now = time.time()
-            wait = self._last_request + interval - now
+            wait = self._last + self._min_interval - now
             if wait > 0:
                 time.sleep(wait)
-            self._last_request = time.time()
-
-    def on_success(self) -> None:
-        """Slowly increase rate after sustained success."""
-        if self._rate >= self._max_rate:
-            return
-        with self._lock:
-            self._consecutive_successes += 1
-            if self._consecutive_successes >= 20:
-                self._consecutive_successes = 0
-                self._rate = min(self._rate * 1.1, self._max_rate)
-
-    def on_rate_limited(self) -> None:
-        """Halve rate on 429, debounced to once per 10 s."""
-        with self._lock:
-            now = time.time()
-            if now - self._last_reduction < 10.0:
-                return
-            self._last_reduction = now
-            self._consecutive_successes = 0
-            old_rate = self._rate
-            self._rate = max(self._rate * 0.5, self._min_rate)
-            log_info(f"RATE LIMIT | 429 detected \u2014 throttling {old_rate:.1f} \u2192 {self._rate:.1f} songs/s")
+            self._last = time.time()
 
 
 _thread_local = threading.local()
@@ -547,13 +506,8 @@ def build_search_queries(song_name: str, artist_name: str) -> list[str]:
 
 
 def build_session() -> requests.Session:
-    from requests.adapters import HTTPAdapter
-
     session = requests.Session()
     session.headers.update({"User-Agent": "msd-deezer-pipeline/1.0"})
-    adapter = HTTPAdapter(pool_connections=4, pool_maxsize=4, max_retries=0)
-    session.mount("https://", adapter)
-    session.mount("http://", adapter)
     return session
 
 
@@ -563,7 +517,6 @@ def get_json(
     params: dict[str, Any] | None = None,
     timeout: int = SEARCH_TIMEOUT_SEC,
     max_retries: int = 3,
-    rate_limiter: "AdaptiveRateLimiter | None" = None,
 ) -> tuple[Any | None, str | None]:
     last_error = None
 
@@ -578,21 +531,13 @@ def get_json(
             return None, last_error
 
         if response.status_code == 200:
-            if rate_limiter is not None:
-                rate_limiter.on_success()
             try:
                 return response.json(), None
             except ValueError as exc:
                 return None, f"Invalid JSON response: {exc}"
 
         last_error = f"HTTP {response.status_code}"
-        if response.status_code == 429:
-            if rate_limiter is not None:
-                rate_limiter.on_rate_limited()
-            if attempt + 1 < max_retries:
-                time.sleep(RATE_LIMIT_BACKOFF_SEC)
-                continue
-        elif response.status_code in {500, 502, 503, 504} and attempt + 1 < max_retries:
+        if response.status_code in {429, 500, 502, 503, 504} and attempt + 1 < max_retries:
             time.sleep(RETRY_DELAY_SEC)
             continue
 
@@ -602,28 +547,17 @@ def get_json(
     return None, last_error or "Request failed"
 
 
-def fetch_track_by_id(
-    session: requests.Session,
-    track_id: Any,
-    rate_limiter: "AdaptiveRateLimiter | None" = None,
-) -> dict[str, Any] | None:
+def fetch_track_by_id(session: requests.Session, track_id: Any) -> dict[str, Any] | None:
     track_id = clean_optional_text(track_id)
     if not track_id:
         return None
-    payload, error = get_json(
-        session, DEEZE_TRACK_URL.format(track_id),
-        timeout=SEARCH_TIMEOUT_SEC, rate_limiter=rate_limiter,
-    )
+    payload, error = get_json(session, DEEZE_TRACK_URL.format(track_id), timeout=SEARCH_TIMEOUT_SEC)
     if error or not isinstance(payload, dict) or payload.get("error"):
         return None
     return payload if payload.get("preview") else None
 
 
-def run_search_query(
-    session: requests.Session,
-    query: str,
-    rate_limiter: "AdaptiveRateLimiter | None" = None,
-) -> tuple[list[dict[str, Any]] | None, str | None]:
+def run_search_query(session: requests.Session, query: str) -> tuple[list[dict[str, Any]] | None, str | None]:
     if not query:
         return [], None
     payload, error = get_json(
@@ -631,7 +565,6 @@ def run_search_query(
         DEEZE_SEARCH_URL,
         params={"q": query, "limit": SEARCH_RESULT_LIMIT},
         timeout=SEARCH_TIMEOUT_SEC,
-        rate_limiter=rate_limiter,
     )
     if error:
         return None, error
@@ -646,12 +579,11 @@ def search_song(
     artist_name: str,
     expected_duration: float | None,
     search_cache: dict[str, dict[str, Any]],
-    rate_limiter: "AdaptiveRateLimiter | None" = None,
 ) -> tuple[dict[str, Any] | None, str | None]:
     cache_key = f"{song_name}|{artist_name}"
     cached = search_cache.get(cache_key)
     if isinstance(cached, dict):
-        refreshed = fetch_track_by_id(session, cached.get("track_id"), rate_limiter=rate_limiter)
+        refreshed = fetch_track_by_id(session, cached.get("track_id"))
         if refreshed:
             metrics = score_candidate(song_name, artist_name, expected_duration, refreshed)
             if is_confident_candidate(metrics, artist_name):
@@ -664,7 +596,7 @@ def search_song(
     confident_match: dict[str, Any] | None = None
 
     for query in build_search_queries(song_name, artist_name):
-        results, error = run_search_query(session, query, rate_limiter=rate_limiter)
+        results, error = run_search_query(session, query)
         if error:
             query_errors.append(f"{query}: {error}")
             continue
@@ -738,7 +670,6 @@ def ensure_preview_download(
     session: requests.Session,
     matched_song: dict[str, Any],
     output_path: Path,
-    rate_limiter: "AdaptiveRateLimiter | None" = None,
 ) -> tuple[bool, str | None, dict[str, Any]]:
     if output_path.exists() and output_path.stat().st_size > 0:
         return True, None, matched_song
@@ -757,7 +688,7 @@ def ensure_preview_download(
         else:
             last_error = "Missing Deezer preview URL"
 
-        refreshed = fetch_track_by_id(session, current_song.get("id"), rate_limiter=rate_limiter)
+        refreshed = fetch_track_by_id(session, current_song.get("id"))
         if refreshed:
             current_song = refreshed
 
@@ -856,9 +787,7 @@ def process_match_row(
     search_cache: dict[str, dict[str, Any]],
     audio_dir: Path,
     csv_path: Path,
-    rate_limiter: "AdaptiveRateLimiter | None" = None,
 ) -> str:
-    """Search + download in one call (used by single-worker mode)."""
     song_name = clean_optional_text(row.get("msd_title", ""))
     artist_name = clean_optional_text(row.get("msd_artist_name", ""))
     expected_duration = normalize_float(row.get("msd_duration", ""))
@@ -866,7 +795,7 @@ def process_match_row(
     row["deezer_last_processed_utc"] = utc_now_iso()
     row["deezer_error"] = ""
 
-    match, error = search_song(session, song_name, artist_name, expected_duration, search_cache, rate_limiter=rate_limiter)
+    match, error = search_song(session, song_name, artist_name, expected_duration, search_cache)
     if error:
         clear_deezer_match_fields(row)
         row["deezer_match_status"] = "search_error"
@@ -887,7 +816,7 @@ def process_match_row(
     output_filename = build_audio_filename(clean_optional_text(row.get("msd_track_id", "")), matched_song)
     output_path = audio_dir / output_filename
 
-    ok, download_error, freshest_song = ensure_preview_download(session, matched_song, output_path, rate_limiter=rate_limiter)
+    ok, download_error, freshest_song = ensure_preview_download(session, matched_song, output_path)
     audio_path_for_csv = output_path if ok or output_path.exists() else None
     populate_match_fields(
         row,
@@ -1055,66 +984,26 @@ def match_and_download(
     if not selected_indices:
         return stats
 
-    # --- Adaptive rate limiter (Phase 2) ---
-    max_rate = max_songs_per_sec * 2.5 if max_songs_per_sec > 0 else 0.0
-    rate_limiter = AdaptiveRateLimiter(max_songs_per_sec, min_rate=1.0, max_rate=max_rate)
+    rate_limiter = RateLimiter(max_songs_per_sec)
     use_concurrent = workers > 1
-    download_workers = max(2, int(workers * DOWNLOAD_WORKERS_FACTOR))
     session_start_time = time.time()
 
     log_info(
-        f"SESSION START | songs={len(selected_indices)} | "
-        f"search_workers={workers} | download_workers={download_workers} | "
+        f"SESSION START | songs={len(selected_indices)} | workers={workers} | "
         f"max_songs_per_sec={max_songs_per_sec or 'unlimited'} | "
         f"skipped_downloaded={stats['skipped_downloaded']} | skipped_no_match={stats['skipped_no_match']}"
     )
 
-    # --- Worker closures ---
-
-    def _search_one(row_index: int) -> tuple[int, dict[str, Any] | None, str | None]:
-        """Rate-limited API search. Returns (row_index, match_or_None, error_or_None)."""
+    def _process_one(row_index: int) -> tuple[int, str]:
         rate_limiter.acquire()
         session = _get_thread_session()
-        row = rows[row_index]
-        song_name = clean_optional_text(row.get("msd_title", ""))
-        artist_name = clean_optional_text(row.get("msd_artist_name", ""))
-        expected_duration = normalize_float(row.get("msd_duration", ""))
-        match, error = search_song(
-            session, song_name, artist_name, expected_duration,
-            search_cache, rate_limiter=rate_limiter,
+        return row_index, process_match_row(
+            row=rows[row_index],
+            session=session,
+            search_cache=search_cache,
+            audio_dir=audio_dir,
+            csv_path=csv_path,
         )
-        return row_index, match, error
-
-    def _download_one(
-        row_index: int, match: dict[str, Any],
-    ) -> tuple[int, str]:
-        """CDN preview download (not rate-limited). Returns (row_index, outcome)."""
-        session = _get_thread_session()
-        row = rows[row_index]
-        matched_song = match["song"]
-        metrics = match["metrics"]
-        query_text = clean_optional_text(match["query"])
-        output_filename = build_audio_filename(
-            clean_optional_text(row.get("msd_track_id", "")), matched_song,
-        )
-        output_path = audio_dir / output_filename
-
-        ok, dl_error, freshest_song = ensure_preview_download(
-            session, matched_song, output_path, rate_limiter=rate_limiter,
-        )
-        audio_path_for_csv = output_path if ok or output_path.exists() else None
-        populate_match_fields(
-            row, freshest_song, metrics, query_text,
-            audio_path_for_csv, csv_path.parent,
-        )
-        row["deezer_match_status"] = "matched"
-        if ok:
-            row["deezer_download_status"] = "downloaded"
-            row["deezer_error"] = ""
-            return row_index, "downloaded"
-        row["deezer_download_status"] = "download_failed"
-        row["deezer_error"] = clean_optional_text(dl_error)
-        return row_index, "download_failed"
 
     def _handle_result(
         row_index: int,
@@ -1135,8 +1024,6 @@ def match_and_download(
                 session_start_time, final_outcomes, len(selected_indices),
             )
 
-    # --- Main attempt loop ---
-
     try:
         attempt = 1
         pending_indices = list(selected_indices)
@@ -1151,7 +1038,6 @@ def match_and_download(
             attempt_start = time.time()
 
             if use_concurrent:
-                # ----- Two-pool pipeline: search pool + download pool -----
                 pbar = None
                 if tqdm is not None:
                     pbar = tqdm(
@@ -1161,67 +1047,17 @@ def match_and_download(
                         file=sys.stderr,
                         dynamic_ncols=True,
                     )
-
-                with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as search_pool, \
-                     concurrent.futures.ThreadPoolExecutor(max_workers=download_workers) as dl_pool:
-
-                    # Submit all searches
-                    search_futures = {
-                        search_pool.submit(_search_one, idx): idx
-                        for idx in pending_indices
-                    }
-                    download_futures: dict[concurrent.futures.Future, int] = {}
-
-                    # Phase A — collect search results, dispatch downloads
-                    for future in concurrent.futures.as_completed(search_futures):
-                        row_index = search_futures[future]
-                        row = rows[row_index]
-                        row["deezer_last_processed_utc"] = utc_now_iso()
-
+                with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+                    futures = {executor.submit(_process_one, idx): idx for idx in pending_indices}
+                    for future in concurrent.futures.as_completed(futures):
                         try:
-                            _, match, error = future.result()
+                            row_index, outcome = future.result()
                         except Exception as exc:
-                            match, error = None, str(exc)[:500]
-
-                        if error:
-                            clear_deezer_match_fields(row)
-                            row["deezer_match_status"] = "search_error"
-                            row["deezer_download_status"] = ""
-                            row["deezer_error"] = error
+                            row_index = futures[future]
                             outcome = "search_error"
-                        elif not match:
-                            clear_deezer_match_fields(row)
-                            row["deezer_match_status"] = "no_match"
-                            row["deezer_download_status"] = ""
-                            row["deezer_error"] = ""
-                            outcome = "no_match"
-                        else:
-                            # Matched — hand off to download pool
-                            dl_future = dl_pool.submit(_download_one, row_index, match)
-                            download_futures[dl_future] = row_index
-                            continue  # outcome determined after download
-
-                        # Immediate outcome (no download needed)
-                        failed_indices_this_attempt.append(row_index)
-                        processed_in_attempt += 1
-                        _handle_result(
-                            row_index, outcome, attempt,
-                            processed_in_attempt, len(pending_indices),
-                        )
-                        if pbar is not None:
-                            pbar.update(1)
-
-                    # Phase B — collect download results
-                    for future in concurrent.futures.as_completed(download_futures):
-                        row_index = download_futures[future]
-                        rows[row_index]["deezer_last_processed_utc"] = utc_now_iso()
-                        try:
-                            _, outcome = future.result()
-                        except Exception as exc:
-                            outcome = "download_failed"
-                            rows[row_index]["deezer_match_status"] = "matched"
-                            rows[row_index]["deezer_download_status"] = "download_failed"
+                            rows[row_index]["deezer_match_status"] = "search_error"
                             rows[row_index]["deezer_error"] = str(exc)[:500]
+                            rows[row_index]["deezer_last_processed_utc"] = utc_now_iso()
 
                         if outcome == "downloaded":
                             completed_in_attempt += 1
@@ -1239,23 +1075,13 @@ def match_and_download(
                 if pbar is not None:
                     pbar.close()
             else:
-                # ----- Single-worker fallback (sequential) -----
                 iterator = progress(
                     pending_indices,
                     total=len(pending_indices),
                     desc=f"Matching on Deezer (attempt {attempt})",
                 )
                 for row_index in iterator:
-                    rate_limiter.acquire()
-                    session = _get_thread_session()
-                    outcome = process_match_row(
-                        row=rows[row_index],
-                        session=session,
-                        search_cache=search_cache,
-                        audio_dir=audio_dir,
-                        csv_path=csv_path,
-                        rate_limiter=rate_limiter,
-                    )
+                    _, outcome = _process_one(row_index)
                     if outcome == "downloaded":
                         completed_in_attempt += 1
                     else:
@@ -1329,8 +1155,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--limit", type=int, help="Maximum number of non-skipped songs to attempt during the Deezer stage.")
     parser.add_argument("--save-every", type=int, default=25, help="Persist the CSV and cache after this many attempts.")
     parser.add_argument("--request-delay", type=float, default=0.0, help="Delay between Deezer attempts in seconds (single-worker mode, 0 when using rate limiter).")
-    parser.add_argument("--workers", type=int, default=8, help="Number of concurrent search threads (default: 8). Download threads = workers * 2.")
-    parser.add_argument("--max-songs-per-sec", type=float, default=8.0, help="Initial rate-limit cap on API calls per second; adapts automatically on 429s (0 = unlimited).")
+    parser.add_argument("--workers", type=int, default=3, help="Number of concurrent download threads (default: 3).")
+    parser.add_argument("--max-songs-per-sec", type=float, default=3.0, help="Rate-limit cap on songs processed per second across all workers (0 = unlimited).")
     parser.add_argument(
         "--retry-no-match",
         action="store_true",
