@@ -71,9 +71,12 @@ def unique_existing_paths(paths: list[Path]) -> tuple[Path, ...]:
 
 
 def discover_data_outputs() -> tuple[Path, ...]:
+    # Intentionally excludes DEFAULT_MATCHES_CSV: that file holds the phase-1
+    # MSD metadata extraction plus incremental Deezer-enrichment progress.
+    # Rebuilding it requires the MillionSongSubset HDF5 dataset, which lives
+    # only on the laptop (gitignored), so auto-deleting it would strand the
+    # DGX. If a true wipe is needed, remove the CSV manually with `rm`.
     candidates: list[Path] = []
-    if DEFAULT_MATCHES_CSV.exists():
-        candidates.append(DEFAULT_MATCHES_CSV)
     if DEFAULT_DATA_DIR.exists():
         for pattern in DEFAULT_PENDING_PATTERNS:
             candidates.extend(DEFAULT_DATA_DIR.glob(pattern))
@@ -114,8 +117,8 @@ def build_cleanup_groups() -> list[CleanupGroup]:
         ),
         CleanupGroup(
             key="data",
-            title="Generated match data",
-            description="Pipeline CSV outputs and pending snapshots in data/.",
+            title="Pending data snapshots",
+            description="Temporary *.pending.* snapshots in data/ (msd_deezer_matches.csv is preserved).",
             paths=discover_data_outputs(),
         ),
         CleanupGroup(
