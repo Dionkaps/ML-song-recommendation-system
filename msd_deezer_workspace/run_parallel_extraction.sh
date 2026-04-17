@@ -115,8 +115,14 @@ start_worker() {
     LABELS+=("$label")
 }
 
+# Prefetch lookahead for GPU workers -- pre-decodes N upcoming songs on
+# background threads so the GPU isn't idled by librosa.load between songs.
+# 3 is enough to ride out occasional slow reads without using much RAM.
+GPU_PREFETCH=${GPU_PREFETCH:-3}
+
 # MusicNN workers -- force CPU-only (CUDA_VISIBLE_DEVICES="" prevents
-# TF from allocating GPU memory even though --device cpu is set).
+# TF from allocating GPU memory even though --device cpu is set). No
+# prefetch (the CPU-bound TF forward pass is the bottleneck, not IO).
 for ((i=0; i<MUSICNN_WORKERS; i++)); do
     start_worker \
         "musicnn[$i/$MUSICNN_WORKERS]" \
@@ -126,6 +132,7 @@ for ((i=0; i<MUSICNN_WORKERS; i++)); do
             --models musicnn \
             --output-dir "$MUSICNN_OUT" \
             --device cpu \
+            --prefetch 0 \
             --shard-index "$i" --num-shards "$MUSICNN_WORKERS"
 done
 
@@ -137,7 +144,8 @@ start_worker \
     python extract_pretrained_embeddings.py \
         --models mert \
         --output-dir "$MERT_OUT" \
-        --device cuda
+        --device cuda \
+        --prefetch "$GPU_PREFETCH"
 
 # EnCodecMAE (GPU)
 start_worker \
@@ -146,7 +154,8 @@ start_worker \
     python extract_pretrained_embeddings.py \
         --models encodecmae \
         --output-dir "$ENCODEC_OUT" \
-        --device cuda
+        --device cuda \
+        --prefetch "$GPU_PREFETCH"
 
 echo ""
 echo "Launched ${#PIDS[@]} workers. Tail a log in another shell for raw detail:"

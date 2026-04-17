@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -130,8 +131,14 @@ class PretrainedEmbeddingExtractor:
         self,
         file_path: str,
         skip_existing: bool = True,
+        preloaded_arrays: dict[str, np.ndarray] | None = None,
     ) -> dict[str, Any]:
         """Extract embeddings from a single audio file using all active models.
+
+        If `preloaded_arrays` is given, extractors that expose
+        `extract_from_array` will use the pre-decoded waveform instead of
+        re-reading the file -- this is how the prefetch pipeline keeps the
+        GPU from idling during librosa.load.
 
         Returns a dict with keys: file, status, embeddings, errors,
         duration_sec, sample_rate.
@@ -166,7 +173,14 @@ class PretrainedEmbeddingExtractor:
                 result["embeddings"][name] = preloaded[name]
                 continue
             try:
-                embedding = extractor.extract(str(path))
+                if (
+                    preloaded_arrays is not None
+                    and name in preloaded_arrays
+                    and hasattr(extractor, "extract_from_array")
+                ):
+                    embedding = extractor.extract_from_array(preloaded_arrays[name])
+                else:
+                    embedding = extractor.extract(str(path))
                 expected_dim = extractor.embedding_dim
                 if embedding.shape[0] != expected_dim:
                     logger.warning(
@@ -192,6 +206,44 @@ class PretrainedEmbeddingExtractor:
 
         return result
 
+    # ── Audio prefetching ─────────────────────────────────────────────
+
+    def _gpu_prefetch_targets(self) -> list[str]:
+        """Return the names of active extractors that support extract_from_array.
+
+        MusicNN has its own TF runtime that reads files internally, so it is
+        excluded. When no GPU extractor supports the array-based path, the
+        prefetch pipeline short-circuits and behavior is identical to the
+        pre-prefetch code path.
+        """
+        return [
+            name for name, ex in self.extractors.items()
+            if hasattr(ex, "extract_from_array")
+        ]
+
+    def _prefetch_arrays(
+        self, file_path: Path, target_names: list[str],
+    ) -> dict[str, np.ndarray]:
+        """Load the waveform for each target extractor at its native sample rate.
+
+        Returns a dict keyed by extractor name. Entries for which loading
+        fails are simply omitted -- process_file will fall back to the
+        per-extractor file-path path for those.
+        """
+        arrays: dict[str, np.ndarray] = {}
+        for name in target_names:
+            extractor = self.extractors[name]
+            try:
+                y, _ = librosa.load(
+                    str(file_path), sr=extractor.sample_rate, mono=True,
+                )
+                arrays[name] = y
+            except Exception as exc:
+                logger.warning(
+                    "prefetch %s for %s failed: %s", name, file_path.name, exc,
+                )
+        return arrays
+
     # ── Directory processing ──────────────────────────────────────────
 
     def process_directory(
@@ -202,6 +254,7 @@ class PretrainedEmbeddingExtractor:
         shard_index: int = 0,
         num_shards: int = 1,
         generate_csvs: bool = True,
+        prefetch: int = 2,
     ) -> dict[str, Any]:
         """Extract embeddings for every audio file in a directory.
 
@@ -228,6 +281,10 @@ class PretrainedEmbeddingExtractor:
             False when `num_shards > 1` because concurrent shards would race
             each other on the CSV files. The launcher/merge script is
             responsible for producing CSVs once every shard has finished.
+        prefetch : int
+            Number of songs to pre-decode in the background for GPU extractors
+            (MERT, EnCodecMAE). Keeps the GPU fed while the next song's audio
+            is being read from disk. 0 disables prefetch. Default: 2.
         """
         if num_shards < 1:
             raise ValueError(f"num_shards must be >= 1, got {num_shards}")
@@ -299,18 +356,63 @@ class PretrainedEmbeddingExtractor:
 
         start_time = time.time()
 
-        for file_path in tqdm(files, desc="Extracting embeddings"):
-            result = self.process_file(str(file_path), skip_existing=skip_existing)
+        gpu_targets = self._gpu_prefetch_targets()
+        use_prefetch = prefetch > 0 and len(gpu_targets) > 0
+        executor: ThreadPoolExecutor | None = None
+        pending: dict[int, Future[dict[str, np.ndarray]]] = {}
 
-            if result["status"] == "error":
-                stats["errors"] += 1
-            else:
-                stats["processed"] += 1
-                for name in self.active_model_names:
-                    if name in result["embeddings"]:
-                        stats["per_model_success"][name] += 1
-                    if name in result["errors"]:
-                        stats["per_model_errors"][name] += 1
+        if use_prefetch:
+            executor = ThreadPoolExecutor(
+                max_workers=prefetch, thread_name_prefix="audio-prefetch",
+            )
+            # Seed the pipeline with the first `prefetch` songs.
+            for i in range(min(prefetch, len(files))):
+                pending[i] = executor.submit(
+                    self._prefetch_arrays, files[i], gpu_targets,
+                )
+            print(
+                f"Audio prefetch:   {prefetch} worker(s) "
+                f"feeding {', '.join(gpu_targets)}\n"
+            )
+
+        try:
+            for i, file_path in enumerate(tqdm(files, desc="Extracting embeddings")):
+                preloaded_arrays: dict[str, np.ndarray] | None = None
+                if use_prefetch and i in pending:
+                    try:
+                        preloaded_arrays = pending.pop(i).result()
+                    except Exception as exc:
+                        logger.warning(
+                            "prefetch failed for %s: %s -- falling back to sync load",
+                            file_path.name, exc,
+                        )
+                        preloaded_arrays = None
+                    next_i = i + prefetch
+                    if next_i < len(files) and executor is not None:
+                        pending[next_i] = executor.submit(
+                            self._prefetch_arrays, files[next_i], gpu_targets,
+                        )
+
+                result = self.process_file(
+                    str(file_path),
+                    skip_existing=skip_existing,
+                    preloaded_arrays=preloaded_arrays,
+                )
+
+                if result["status"] == "error":
+                    stats["errors"] += 1
+                else:
+                    stats["processed"] += 1
+                    for name in self.active_model_names:
+                        if name in result["embeddings"]:
+                            stats["per_model_success"][name] += 1
+                        if name in result["errors"]:
+                            stats["per_model_errors"][name] += 1
+        finally:
+            if executor is not None:
+                # cancel_futures avoids blocking on the remaining prefetch
+                # tasks when the caller Ctrl-C's mid-loop.
+                executor.shutdown(wait=False, cancel_futures=True)
 
         elapsed = time.time() - start_time
 

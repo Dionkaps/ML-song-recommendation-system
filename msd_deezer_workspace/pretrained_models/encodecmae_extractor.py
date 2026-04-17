@@ -72,9 +72,20 @@ class EnCodecMAEExtractor(BaseExtractor):
 
     def extract(self, audio_path: str) -> np.ndarray:
         y, _ = librosa.load(audio_path, sr=self.sample_rate, mono=True)
+        return self.extract_from_array(y, audio_path=audio_path)
 
+    def extract_from_array(
+        self, y: np.ndarray, audio_path: str | None = None,
+    ) -> np.ndarray:
+        """Same as `extract` but skips the librosa.load step.
+
+        Used by the orchestrator's async prefetch pipeline so the GPU isn't
+        idled by disk I/O between songs. `audio_path` is optional and only
+        used if the installed encodecmae API version falls back to the
+        file-path call path.
+        """
         with self._torch.no_grad():
-            features = self._call_model(y, audio_path)
+            features = self._call_model(y, audio_path or "")
 
         if isinstance(features, self._torch.Tensor):
             features = features.detach().cpu().numpy()

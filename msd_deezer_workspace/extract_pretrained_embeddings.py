@@ -147,6 +147,15 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--prefetch", type=int, default=2,
+        help=(
+            "Number of songs to pre-decode in the background for GPU "
+            "extractors (MERT, EnCodecMAE). Keeps the GPU fed while the "
+            "next song's audio is being read from disk. 0 disables. "
+            "Default: 2."
+        ),
+    )
+    parser.add_argument(
         "-v", "--verbose", action="store_true",
         help="Enable DEBUG-level logging.",
     )
@@ -238,6 +247,7 @@ def main() -> int:
         shard_index=args.shard_index,
         num_shards=args.num_shards,
         generate_csvs=(args.num_shards == 1),
+        prefetch=args.prefetch,
     )
     return 0
 

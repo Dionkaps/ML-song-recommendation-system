@@ -74,7 +74,14 @@ class MERTExtractor(BaseExtractor):
 
     def extract(self, audio_path: str) -> np.ndarray:
         y, _ = librosa.load(audio_path, sr=self.sample_rate, mono=True)
+        return self.extract_from_array(y)
 
+    def extract_from_array(self, y: np.ndarray) -> np.ndarray:
+        """Same as `extract` but skips the librosa.load step.
+
+        Used by the orchestrator's async prefetch pipeline so the GPU isn't
+        idled by disk I/O between songs.
+        """
         inputs = self.processor(
             y, sampling_rate=self.sample_rate, return_tensors="pt",
         )
