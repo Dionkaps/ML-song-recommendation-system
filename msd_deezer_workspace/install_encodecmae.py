@@ -32,6 +32,18 @@ from pathlib import Path
 REPO_URL = "https://github.com/habla-liaa/encodecmae.git"
 SUBPACKAGES = ("models", "configs", "tasks", "heareval_model", "scripts")
 
+# Runtime deps that encodecmae imports at package-init / load_model time.
+# We install these explicitly because the initial `pip install --no-deps`
+# of encodecmae itself skips them, and re-runs of this installer won't
+# re-trigger pip's dep resolver. Safe to pip-install repeatedly -- pip
+# skips packages that are already at a satisfying version.
+RUNTIME_DEPS = (
+    "huggingface_hub",
+    "gin-config",
+    "encodec",
+    "einops",
+)
+
 
 def run(cmd: list[str]) -> None:
     print(f"  $ {' '.join(cmd)}")
@@ -120,6 +132,16 @@ def verify() -> None:
     print(f"\nOK -- {result.stdout.strip()}")
 
 
+def ensure_runtime_deps() -> None:
+    """Install encodecmae's runtime deps that `--no-deps` skipped.
+
+    Pip is a no-op when a package is already installed at a satisfying
+    version, so this is cheap on re-runs.
+    """
+    print("Ensuring encodecmae runtime dependencies are installed...")
+    run([sys.executable, "-m", "pip", "install", *RUNTIME_DEPS])
+
+
 def main() -> int:
     pkg_dir = pip_install_if_missing()
     print(f"encodecmae installed at: {pkg_dir}")
@@ -129,6 +151,7 @@ def main() -> int:
     else:
         patch_missing_subpackages(pkg_dir)
 
+    ensure_runtime_deps()
     verify()
     return 0
 
