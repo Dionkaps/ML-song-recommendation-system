@@ -1,0 +1,42 @@
+# Pretrained embedding extraction dependencies
+# Install alongside the base requirements.txt:
+#   pip install -r requirements.txt
+#   pip install -r requirements-pretrained.txt
+#
+# These are heavy GPU-oriented packages. Intended for the DGX server.
+# On a local CPU-only machine you can still run MusicNN by installing
+# only tensorflow + musicnn from this list.
+
+# ── MERT (HuggingFace Transformers) ──────────────────────────────────────
+# Needs PyTorch >= 1.13 with CUDA support
+torch
+transformers>=4.30.0
+
+# ── MusicNN (TensorFlow CNN) ─────────────────────────────────────────────
+# TF 2.x; CPU is fine for the 200-dim MSD_musicnn model.
+# musicnn 0.1.0 calls the legacy Keras 2 `batch_normalization` API that was
+# removed in Keras 3 (TF >= 2.16). tf-keras is a Keras-2 compatibility shim
+# and the extractor sets TF_USE_LEGACY_KERAS=1 before importing TensorFlow
+# so that `tf.keras` routes through it.
+tensorflow>=2.10
+tf-keras
+musicnn
+
+# ── EnCodecMAE ───────────────────────────────────────────────────────────
+# Install from GitHub. NOTE: the upstream setup.cfg declares
+# `packages = encodecmae` (non-recursive) and silently omits the
+# encodecmae.models / configs / tasks / heareval_model / scripts
+# subpackages, causing `from encodecmae.models import EncodecMAE` to fail.
+# After the pip install, copy the missing subdirs into site-packages:
+#
+#   git clone https://github.com/habla-liaa/encodecmae.git
+#   pip install --no-deps ./encodecmae
+#   python -c "import encodecmae, pathlib, shutil, sys; \
+#     dst = pathlib.Path(encodecmae.__file__).parent; \
+#     src = pathlib.Path('encodecmae/encodecmae'); \
+#     [shutil.copytree(src/s, dst/s, dirs_exist_ok=True) for s in \
+#      ['models','configs','tasks','heareval_model','scripts']]"
+#
+# The correct model variant name on HuggingFace is 'mel256-ec-large_st'
+# (NOT the 'large-st' in the README).
+# encodecmae  # install from GitHub with the workaround above

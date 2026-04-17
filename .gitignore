@@ -22,6 +22,21 @@ venv/
 /msd_deezer_workspace/data/*.pending.csv
 /calendar/
 
+# Pretrained-embedding outputs (NPZ shards + per-model + fused CSVs, can be tens of GB)
+/msd_deezer_workspace/pretrained_embeddings/
+/msd_deezer_workspace/sample_runs/
+
+# Model weights / HuggingFace caches (may appear locally or on the DGX inside the repo)
+hf_cache/
+.cache/
+*.ckpt
+*.pt
+*.pth
+*.bin
+*.safetensors
+*.pkl
+*.joblib
+
 # Large audio and extracted feature artifacts
 *.wav
 *.mp3
@@ -45,3 +60,10 @@ venv/
 *.xz
 *.7z
 *.rar
+
+# Dev tooling / OS junk
+.pytest_cache/
+*.egg-info/
+.ipynb_checkpoints/
+.DS_Store
+Thumbs.db
