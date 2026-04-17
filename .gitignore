@@ -67,3 +67,14 @@ hf_cache/
 .ipynb_checkpoints/
 .DS_Store
 Thumbs.db
+
+# Shard intermediates from run_parallel_extraction.sh -- never commit
+/msd_deezer_workspace/pretrained_embeddings_musicnn/
+/msd_deezer_workspace/pretrained_embeddings_mert/
+/msd_deezer_workspace/pretrained_embeddings_encodecmae/
+/msd_deezer_workspace/pretrained_embeddings_logs/
+
+# Allow the downstream artifacts the laptop dashboard needs
+!/msd_deezer_workspace/cluster_results/
+!/msd_deezer_workspace/cluster_results/**
+!/msd_deezer_workspace/pretrained_embeddings/feature_vectors.csv

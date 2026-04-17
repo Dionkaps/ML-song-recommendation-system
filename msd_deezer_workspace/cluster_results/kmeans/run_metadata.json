@@ -1,0 +1,19 @@
+{
+  "algorithm": "kmeans",
+  "cluster_count": 14,
+  "samples": 8128,
+  "outliers_detected": 407,
+  "outliers_reassigned": true,
+  "feature_source": "/storage/data4/up1072603/projects/ML-song-recommendation-system/msd_deezer_workspace/pretrained_embeddings",
+  "summary_csv_path": "/storage/data4/up1072603/projects/ML-song-recommendation-system/msd_deezer_workspace/pretrained_embeddings/feature_vectors.csv",
+  "pca_components": 100,
+  "pca_explained_variance_ratio": 0.8358235919990478,
+  "umap_components": 15,
+  "umap_n_neighbors": 40,
+  "umap_min_dist": 0.01,
+  "clustering_dimensions": 15,
+  "inertia": 4.611920356750488,
+  "silhouette_score": 0.44450199604034424,
+  "distance_metric": "cosine_via_l2_normalization",
+  "selection_method": "multi_criterion_consensus"
+}
