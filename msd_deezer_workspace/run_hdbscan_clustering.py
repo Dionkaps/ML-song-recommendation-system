@@ -87,6 +87,7 @@ def _fit_hdbscan_candidate(
         min_samples=min_samples,
         metric="euclidean",
         cluster_selection_method=cluster_selection_method,
+        copy=True,
     )
     labels = model.fit_predict(x)
     clustered_mask = labels != -1
