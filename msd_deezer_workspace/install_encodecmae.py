@@ -39,7 +39,9 @@ SUBPACKAGES = ("models", "configs", "tasks", "heareval_model", "scripts")
 # skips packages that are already at a satisfying version.
 RUNTIME_DEPS = (
     "huggingface_hub",
-    "gin-config",
+    "ginpipe",                   # habla-liaa's gin-config wrapper (pulls gin-config in)
+    "pytorch-lightning>=2.0.0",  # required by encodecmae.models.mae
+    "torchinfo",
     "encodec",
     "einops",
 )
