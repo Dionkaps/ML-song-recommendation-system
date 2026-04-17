@@ -131,3 +131,18 @@ Use this block when a pretrained embedding extraction run is stuck, needs to be 
 This command stops matching `extract_pretrained_embeddings.py` processes for your current user.
 
 ---
+
+## 9) Launch the cluster explorer with pretrained embeddings
+
+If you want to open the cluster explorer using the pretrained embeddings output and without Deezer previews, use:
+
+```bash
+cd /storage/data4/up1072603/projects/ML-song-recommendation-system/msd_deezer_workspace
+python launch_cluster_explorer.py --features-path pretrained_embeddings/ --no-deezer-previews
+```
+
+### When to use this block
+
+Use this block when you want to inspect clusters based on the contents of `pretrained_embeddings/` and avoid loading Deezer preview audio in the explorer.
+
+---

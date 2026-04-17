@@ -14,6 +14,13 @@ DEFAULT_FEATURES_DIR = WORKSPACE_DIR / "features"
 DEFAULT_CLUSTER_RESULTS_DIR = WORKSPACE_DIR / "cluster_results"
 DEFAULT_CACHE_DIR = WORKSPACE_DIR / "cache"
 DEFAULT_LOGS_DIR = WORKSPACE_DIR / "logs"
+DEFAULT_PRETRAINED_DIR = WORKSPACE_DIR / "pretrained_embeddings"
+DEFAULT_PRETRAINED_SHARD_DIRS = (
+    WORKSPACE_DIR / "pretrained_embeddings_musicnn",
+    WORKSPACE_DIR / "pretrained_embeddings_mert",
+    WORKSPACE_DIR / "pretrained_embeddings_encodecmae",
+)
+DEFAULT_PRETRAINED_LOGS_DIR = WORKSPACE_DIR / "pretrained_embeddings_logs"
 DEFAULT_MATCHES_CSV = DEFAULT_DATA_DIR / "msd_deezer_matches.csv"
 DEFAULT_PENDING_PATTERNS = ("*.pending.csv", "*.pending.json", "*.pending")
 
@@ -126,6 +133,24 @@ def build_cleanup_groups() -> list[CleanupGroup]:
             title="Run logs",
             description="Per-session resilient download logs and summaries in logs/.",
             paths=(DEFAULT_LOGS_DIR,),
+        ),
+        CleanupGroup(
+            key="pretrained_embeddings",
+            title="Pretrained embeddings",
+            description="MusicNN/MERT/EnCodecMAE fused + per-model CSVs and per-song NPZs in pretrained_embeddings/ (tens of GB).",
+            paths=(DEFAULT_PRETRAINED_DIR,),
+        ),
+        CleanupGroup(
+            key="pretrained_shards",
+            title="Pretrained-embedding shard intermediates",
+            description="Per-model shard outputs from run_parallel_extraction.sh (musicnn/mert/encodecmae).",
+            paths=DEFAULT_PRETRAINED_SHARD_DIRS,
+        ),
+        CleanupGroup(
+            key="pretrained_logs",
+            title="Pretrained-embedding run logs",
+            description="Timestamped parallel-extraction logs in pretrained_embeddings_logs/.",
+            paths=(DEFAULT_PRETRAINED_LOGS_DIR,),
         ),
         CleanupGroup(
             key="pycache",
@@ -282,7 +307,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--targets",
         nargs="+",
-        choices=("audio", "features", "cluster_results", "cache", "data", "logs", "pycache"),
+        choices=(
+            "audio",
+            "features",
+            "cluster_results",
+            "cache",
+            "data",
+            "logs",
+            "pretrained_embeddings",
+            "pretrained_shards",
+            "pretrained_logs",
+            "pycache",
+        ),
         help="Delete only the named cleanup groups.",
     )
     return parser.parse_args()

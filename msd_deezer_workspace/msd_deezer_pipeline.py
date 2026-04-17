@@ -340,8 +340,9 @@ def load_search_cache(cache_path: Path) -> dict[str, dict[str, Any]]:
 
 def save_search_cache(cache_path: Path, cache: dict[str, dict[str, Any]]) -> None:
     cache_path.parent.mkdir(parents=True, exist_ok=True)
+    snapshot = cache.copy()
     temp_path = cache_path.with_suffix(cache_path.suffix + ".tmp")
-    temp_path.write_text(json.dumps(cache, indent=2, ensure_ascii=False), encoding="utf-8")
+    temp_path.write_text(json.dumps(snapshot, indent=2, ensure_ascii=False), encoding="utf-8")
     temp_path.replace(cache_path)
 
 

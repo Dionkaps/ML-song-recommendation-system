@@ -1,80 +1,43 @@
-# Python cache artifacts
+# Python cache
 __pycache__/
 *.py[cod]
+*.egg-info/
 
-# Common local environment folders
+# Virtualenvs / env
 .venv/
 venv/
 .env
+
+# IDE / editor / OS junk
 .claude/
-
-# Large source datasets
-/millionsongsubset/
-
-# Generated workspace outputs
-/msd_deezer_workspace/audio/
-/msd_deezer_workspace/cache/
-/msd_deezer_workspace/logs/
-/msd_deezer_workspace/cluster_results/
-/msd_deezer_workspace/features/raw/
-/msd_deezer_workspace/features/feature_vectors.csv
-/msd_deezer_workspace/data/*.tmp
-/msd_deezer_workspace/data/*.pending.csv
-/calendar/
-
-# Pretrained-embedding outputs (NPZ shards + per-model + fused CSVs, can be tens of GB)
-/msd_deezer_workspace/pretrained_embeddings/
-/msd_deezer_workspace/sample_runs/
-
-# Model weights / HuggingFace caches (may appear locally or on the DGX inside the repo)
-hf_cache/
-.cache/
-*.ckpt
-*.pt
-*.pth
-*.bin
-*.safetensors
-*.pkl
-*.joblib
-
-# Large audio and extracted feature artifacts
-*.wav
-*.mp3
-*.flac
-*.ogg
-*.m4a
-*.aac
-*.wma
-*.aiff
-*.npz
-*.npy
-*.h5
-
-# Logs, temp files, and archives
-*.log
-*.tmp
-*.zip
-*.tar
-*.gz
-*.bz2
-*.xz
-*.7z
-*.rar
-
-# Dev tooling / OS junk
 .pytest_cache/
-*.egg-info/
 .ipynb_checkpoints/
 .DS_Store
 Thumbs.db
 
-# Shard intermediates from run_parallel_extraction.sh -- never commit
+# Source datasets (not redistributed)
+/millionsongsubset/
+
+# Generated workspace outputs -- large, regenerable
+/msd_deezer_workspace/audio/
+/msd_deezer_workspace/cache/
+/msd_deezer_workspace/logs/
+/msd_deezer_workspace/features/raw/
+/msd_deezer_workspace/features/feature_vectors.csv
+/msd_deezer_workspace/sample_runs/
+/msd_deezer_workspace/data/*.tmp
+/msd_deezer_workspace/data/*.pending.csv
+/calendar/
+
+# Per-song NPZ dump (tens of GB) -- the fused + per-model CSVs beside it stay tracked
+/msd_deezer_workspace/pretrained_embeddings/raw/
+
+# Parallel-extraction shard intermediates -- never commit
 /msd_deezer_workspace/pretrained_embeddings_musicnn/
 /msd_deezer_workspace/pretrained_embeddings_mert/
 /msd_deezer_workspace/pretrained_embeddings_encodecmae/
 /msd_deezer_workspace/pretrained_embeddings_logs/
 
-# Allow the downstream artifacts the laptop dashboard needs
-!/msd_deezer_workspace/cluster_results/
-!/msd_deezer_workspace/cluster_results/**
-!/msd_deezer_workspace/pretrained_embeddings/feature_vectors.csv
+# HuggingFace / torch model caches
+hf_cache/
+.cache/
