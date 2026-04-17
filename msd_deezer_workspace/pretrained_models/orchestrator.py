@@ -199,6 +199,9 @@ class PretrainedEmbeddingExtractor:
         directory: str | Path,
         skip_existing: bool = True,
         limit: int | None = None,
+        shard_index: int = 0,
+        num_shards: int = 1,
+        generate_csvs: bool = True,
     ) -> dict[str, Any]:
         """Extract embeddings for every audio file in a directory.
 
@@ -211,7 +214,35 @@ class PretrainedEmbeddingExtractor:
             each song (crash-safe resume).
         limit : int | None
             If set, processes only the first N files (useful for testing).
+            Applied before sharding, so --limit N --num-shards K distributes
+            N files across K shards.
+        shard_index : int
+            Zero-based index of this shard when running in sharded mode.
+            Each shard picks every Nth file from the sorted list.
+        num_shards : int
+            Total number of parallel shards (1 = no sharding, default).
+            Use to run multiple independent workers against the same output
+            directory -- e.g., several CPU-bound MusicNN workers.
+        generate_csvs : bool
+            If True, regenerate CSVs from all NPZs after extraction. Must be
+            False when `num_shards > 1` because concurrent shards would race
+            each other on the CSV files. The launcher/merge script is
+            responsible for producing CSVs once every shard has finished.
         """
+        if num_shards < 1:
+            raise ValueError(f"num_shards must be >= 1, got {num_shards}")
+        if not 0 <= shard_index < num_shards:
+            raise ValueError(
+                f"shard_index must be in [0, {num_shards}), got {shard_index}"
+            )
+        if num_shards > 1 and generate_csvs:
+            logger.warning(
+                "generate_csvs=True with num_shards=%d would race concurrent "
+                "shards on CSV writes; forcing generate_csvs=False.",
+                num_shards,
+            )
+            generate_csvs = False
+
         input_dir = Path(directory)
         if not input_dir.exists():
             logger.error("Directory not found: %s", directory)
@@ -221,12 +252,22 @@ class PretrainedEmbeddingExtractor:
         for ext in SUPPORTED_AUDIO_EXTENSIONS:
             files.extend(input_dir.glob(f"*{ext}"))
         files = sorted(files)
+        total_before_shard = len(files)
 
         if limit is not None and limit > 0:
             files = files[: int(limit)]
 
+        if num_shards > 1:
+            files = [f for i, f in enumerate(files) if i % num_shards == shard_index]
+
         if not files:
-            logger.warning("No audio files found in %s", input_dir)
+            if num_shards > 1:
+                logger.warning(
+                    "Shard %d/%d has no files to process (source had %d).",
+                    shard_index, num_shards, total_before_shard,
+                )
+            else:
+                logger.warning("No audio files found in %s", input_dir)
             return {"total": 0}
 
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -239,11 +280,16 @@ class PretrainedEmbeddingExtractor:
             "per_model_success": {name: 0 for name in self.active_model_names},
             "per_model_errors": {name: 0 for name in self.active_model_names},
             "device_request": self.device_request,
+            "shard_index": shard_index,
+            "num_shards": num_shards,
         }
 
         print(f"\n{'=' * 60}")
         print("PRETRAINED EMBEDDING EXTRACTION")
         print(f"{'=' * 60}")
+        if num_shards > 1:
+            print(f"Shard:            {shard_index}/{num_shards} "
+                  f"({len(files)} of {total_before_shard} files)")
         print(f"Files to process: {len(files)}")
         print(f"Active models:    {', '.join(self.active_model_names)}")
         print(f"Device request:   {self.device_request}")
@@ -268,21 +314,36 @@ class PretrainedEmbeddingExtractor:
 
         elapsed = time.time() - start_time
 
-        print("\nGenerating CSV summaries...")
-        csv_paths = generate_all_csvs(
-            self.raw_output_dir, self.output_dir,
-            input_dir, self.active_model_names,
-        )
+        csv_paths: dict[str, str] = {}
+        if generate_csvs:
+            print("\nGenerating CSV summaries...")
+            csv_paths = generate_all_csvs(
+                self.raw_output_dir, self.output_dir,
+                input_dir, self.active_model_names,
+            )
+        else:
+            print(
+                "\nSkipping CSV generation (sharded run). Run the merge "
+                "script after all shards finish to produce the CSVs."
+            )
 
         stats["elapsed_sec"] = round(elapsed, 1)
         stats["csv_files"] = csv_paths
 
-        summary_path = self.output_dir / "extraction_summary.json"
+        if num_shards > 1:
+            summary_name = (
+                f"extraction_summary_shard{shard_index:02d}of{num_shards:02d}.json"
+            )
+        else:
+            summary_name = "extraction_summary.json"
+        summary_path = self.output_dir / summary_name
         summary_path.write_text(json.dumps(stats, indent=2), encoding="utf-8")
 
         print(f"\n{'=' * 60}")
         print("EXTRACTION SUMMARY")
         print(f"{'=' * 60}")
+        if num_shards > 1:
+            print(f"Shard:        {shard_index}/{num_shards}")
         print(f"Total files:  {stats['total']}")
         print(f"Processed:    {stats['processed']}")
         print(f"Errors:       {stats['errors']}")

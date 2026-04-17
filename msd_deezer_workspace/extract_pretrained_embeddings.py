@@ -130,6 +130,23 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--shard-index", type=int, default=0,
+        help=(
+            "Zero-based index of this shard when running in sharded mode. "
+            "Used with --num-shards. Default: 0."
+        ),
+    )
+    parser.add_argument(
+        "--num-shards", type=int, default=1,
+        help=(
+            "Total number of parallel shards. Each worker picks every Nth "
+            "file from the sorted list. Useful for running multiple CPU "
+            "MusicNN workers in parallel against the same output directory. "
+            "When >1, CSV generation is skipped in-process -- run "
+            "merge_sharded_embeddings.py after all shards finish. Default: 1."
+        ),
+    )
+    parser.add_argument(
         "-v", "--verbose", action="store_true",
         help="Enable DEBUG-level logging.",
     )
@@ -176,6 +193,19 @@ def main() -> int:
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
 
+    if args.num_shards < 1:
+        logger.error("--num-shards must be >= 1, got %d", args.num_shards)
+        return 2
+    if not 0 <= args.shard_index < args.num_shards:
+        logger.error(
+            "--shard-index must be in [0, %d), got %d",
+            args.num_shards, args.shard_index,
+        )
+        return 2
+    if args.num_shards > 1 and args.csv_only:
+        logger.error("--csv-only cannot be combined with --num-shards > 1")
+        return 2
+
     model_names = _parse_models(args.models)
 
     # Fast path: just verify models can load and exit.
@@ -205,6 +235,9 @@ def main() -> int:
         input_dir,
         skip_existing=not args.no_resume,
         limit=args.limit,
+        shard_index=args.shard_index,
+        num_shards=args.num_shards,
+        generate_csvs=(args.num_shards == 1),
     )
     return 0
 
