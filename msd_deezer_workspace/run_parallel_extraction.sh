@@ -74,6 +74,38 @@ echo "=========================================================="
 declare -a PIDS=()
 declare -a LABELS=()
 
+# Kill every background worker on Ctrl-C / SIGTERM. Without this trap,
+# `set -e` exits the script but leaves the Python children orphaned --
+# they keep running (and keep the GPU busy) until the OS reaps them.
+cleanup() {
+    local sig="${1:-INT}"
+    echo "" >&2
+    echo "Caught SIG${sig} -- terminating ${#PIDS[@]} worker(s)..." >&2
+    for pid in "${PIDS[@]:-}"; do
+        # SIGTERM first (lets Python finalize the current song's NPZ);
+        # fall back to SIGKILL after a short grace period.
+        kill -TERM "$pid" 2>/dev/null || true
+    done
+    # Give workers up to 5s to exit cleanly, then force-kill stragglers.
+    for _ in 1 2 3 4 5; do
+        local alive=0
+        for pid in "${PIDS[@]:-}"; do
+            if kill -0 "$pid" 2>/dev/null; then alive=1; break; fi
+        done
+        [[ $alive -eq 0 ]] && break
+        sleep 1
+    done
+    for pid in "${PIDS[@]:-}"; do
+        if kill -0 "$pid" 2>/dev/null; then
+            kill -KILL "$pid" 2>/dev/null || true
+        fi
+    done
+    wait 2>/dev/null || true
+    exit 130
+}
+trap 'cleanup INT'  INT
+trap 'cleanup TERM' TERM
+
 start_worker() {
     local label="$1"; shift
     local log="$1"; shift
@@ -117,12 +149,102 @@ start_worker \
         --device cuda
 
 echo ""
-echo "Launched ${#PIDS[@]} workers. Waiting for all to finish..."
-echo "Tail a log in another shell, e.g.:  tail -f $LOG_DIR/mert.log"
+echo "Launched ${#PIDS[@]} workers. Tail a log in another shell for raw detail:"
+echo "  tail -f $LOG_DIR/mert.log   # or musicnn_shard0of${MUSICNN_WORKERS}.log, encodecmae.log"
 echo ""
 
-# --- Wait for every worker --------------------------------------------------
+# --- Progress dashboard + wait ---------------------------------------------
 
+# Total audio files -- used as the denominator for all three progress bars
+# (each model processes the same input set). Count lazily across the
+# supported extensions.
+count_audio_files() {
+    if [[ ! -d audio ]]; then
+        echo 0
+        return
+    fi
+    find audio -maxdepth 1 -type f \( \
+        -iname "*.wav" -o -iname "*.mp3" -o -iname "*.flac" -o -iname "*.m4a" \
+    \) 2>/dev/null | wc -l
+}
+
+TOTAL_AUDIO=$(count_audio_files)
+if [[ $TOTAL_AUDIO -eq 0 ]]; then
+    echo "WARNING: no audio files found under ./audio -- bars will stay empty." >&2
+    TOTAL_AUDIO=1
+fi
+
+count_npz() {
+    local raw="$1/raw"
+    if [[ ! -d "$raw" ]]; then
+        echo 0
+        return
+    fi
+    find "$raw" -maxdepth 1 -name "*.npz" 2>/dev/null | wc -l
+}
+
+draw_bar() {
+    # draw_bar <done> <total> [<width>]
+    local d=$1 t=$2 w=${3:-40}
+    if [[ $t -le 0 ]]; then t=1; fi
+    local f=$(( d * w / t ))
+    if [[ $f -gt $w ]]; then f=$w; fi
+    local e=$(( w - f ))
+    local bar="" i
+    for ((i=0; i<f; i++)); do bar+="#"; done
+    for ((i=0; i<e; i++)); do bar+="."; done
+    local pct=$(( d * 100 / t ))
+    printf "[%s] %3d%%  %d/%d" "$bar" "$pct" "$d" "$t"
+}
+
+workers_alive() {
+    local pid
+    for pid in "${PIDS[@]}"; do
+        if kill -0 "$pid" 2>/dev/null; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Only use cursor-moving ANSI codes when stdout is a real terminal; when
+# the output is a pipe/file (e.g. redirected to a log), fall back to
+# append-style updates so the file stays readable.
+USE_ANSI=0
+if [[ -t 1 ]]; then
+    USE_ANSI=1
+fi
+
+draw_progress() {
+    local musicnn_done mert_done encodec_done
+    musicnn_done=$(count_npz "$MUSICNN_OUT")
+    mert_done=$(count_npz "$MERT_OUT")
+    encodec_done=$(count_npz "$ENCODEC_OUT")
+
+    if [[ $USE_ANSI -eq 1 ]]; then
+        # move cursor up 3 lines so we overwrite the previous frame
+        printf "\033[3A"
+    fi
+    printf "\033[K  musicnn     %s\n" "$(draw_bar "$musicnn_done" "$TOTAL_AUDIO")"
+    printf "\033[K  mert        %s\n" "$(draw_bar "$mert_done"    "$TOTAL_AUDIO")"
+    printf "\033[K  encodecmae  %s\n" "$(draw_bar "$encodec_done" "$TOTAL_AUDIO")"
+}
+
+echo "Progress (refreshes every 2s; Ctrl-A d inside screen detaches):"
+# Reserve 3 blank lines so the first cursor-up has room to land on.
+if [[ $USE_ANSI -eq 1 ]]; then
+    printf "\n\n\n"
+fi
+
+while workers_alive; do
+    draw_progress
+    sleep 2
+done
+# Final redraw so the finished state is visible.
+draw_progress
+echo ""
+
+# Reap each child to collect its exit status now that all are done.
 FAILED=0
 for idx in "${!PIDS[@]}"; do
     pid="${PIDS[$idx]}"
