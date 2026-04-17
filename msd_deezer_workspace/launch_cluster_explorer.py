@@ -3,13 +3,16 @@ from __future__ import annotations
 import argparse
 import json
 import mimetypes
+import threading
 import unicodedata
+import urllib.request
 import webbrowser
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+from urllib.error import URLError
 from urllib.parse import parse_qs, quote, urlparse
 
 import numpy as np
@@ -18,6 +21,10 @@ from sklearn.decomposition import PCA
 from sklearn.neighbors import NearestNeighbors
 
 from clustering.shared import DEFAULT_FEATURES_DIR, prepare_dataset
+
+
+DEEZER_TRACK_API = "https://api.deezer.com/track/{track_id}"
+DEEZER_API_TIMEOUT_SEC = 5.0
 
 
 WORKSPACE_DIR = Path(__file__).resolve().parent
@@ -45,6 +52,47 @@ class ExplorerState:
     available_algorithms: list[str]
     default_algorithm: str
     recommendation_count: int
+    deezer_track_ids_by_id: dict[str, str] = field(default_factory=dict)
+    deezer_preview_cache: dict[str, str | None] = field(default_factory=dict)
+    preview_cache_lock: threading.Lock = field(default_factory=threading.Lock)
+    prefer_deezer_previews: bool = True
+
+
+def _clean_deezer_track_id(value: Any) -> str:
+    """Normalize a Deezer track ID to a bare digit string ("" if invalid)."""
+    text = _clean_text(value)
+    if not text:
+        return ""
+    try:
+        return str(int(float(text)))
+    except ValueError:
+        return ""
+
+
+def _resolve_deezer_preview(track_id: str) -> str | None:
+    """Look up a track's preview URL via the public Deezer API.
+
+    Returns None on any failure (network error, non-200, missing field).
+    The result is meant to be cached by the caller.
+    """
+    if not track_id:
+        return None
+    url = DEEZER_TRACK_API.format(track_id=track_id)
+    request = urllib.request.Request(
+        url, headers={"User-Agent": "cluster-explorer/1.0"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=DEEZER_API_TIMEOUT_SEC) as response:
+            if response.status != 200:
+                return None
+            payload = json.loads(response.read().decode("utf-8"))
+    except (URLError, TimeoutError, OSError, json.JSONDecodeError):
+        return None
+
+    preview = payload.get("preview")
+    if isinstance(preview, str) and preview.startswith("http"):
+        return preview
+    return None
 
 
 def _safe_int(value: Any) -> int | None:
@@ -78,6 +126,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--limit", type=int, help="Optional limit for faster smoke tests.")
     parser.add_argument("--no-browser", action="store_true", help="Do not open the browser automatically.")
     parser.add_argument("--recommendations", type=int, default=DEFAULT_RECOMMENDATIONS, help="How many recommendations to return for the selected song.")
+    parser.add_argument(
+        "--no-deezer-previews", dest="prefer_deezer_previews",
+        action="store_false", default=True,
+        help=(
+            "Always serve local audio files instead of streaming previews "
+            "from the Deezer API. Default: prefer Deezer and fall back to "
+            "the local file only if the API call fails."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -506,6 +563,7 @@ def _build_state(args: argparse.Namespace) -> ExplorerState:
     neighbors_model.fit(scaled_matrix)
 
     audio_paths_by_id: dict[str, Path] = {}
+    deezer_track_ids_by_id: dict[str, str] = {}
     songs_payload: list[dict[str, Any]] = []
     songs_by_id: dict[str, dict[str, Any]] = {}
     cluster_labels: dict[str, np.ndarray] = {}
@@ -521,6 +579,13 @@ def _build_state(args: argparse.Namespace) -> ExplorerState:
         if audio_path is not None and audio_path.exists():
             audio_paths_by_id[song_id] = audio_path
 
+        deezer_track_id = _clean_deezer_track_id(row.get("deezer_track_id"))
+        if deezer_track_id:
+            deezer_track_ids_by_id[song_id] = deezer_track_id
+
+        has_local_audio = bool(audio_path is not None and audio_path.exists())
+        has_audio = has_local_audio or bool(deezer_track_id)
+
         song_payload = {
             "id": song_id,
             "fileName": _clean_text(row.get("file")),
@@ -533,8 +598,9 @@ def _build_state(args: argparse.Namespace) -> ExplorerState:
             "deezerTitle": _clean_text(row.get("deezer_title")),
             "deezerArtist": _clean_text(row.get("deezer_artist")),
             "deezerLink": _clean_text(row.get("deezer_link")),
+            "deezerTrackId": deezer_track_id,
             "audioUrl": f"/audio/{song_id}",
-            "hasAudio": bool(audio_path is not None and audio_path.exists()),
+            "hasAudio": has_audio,
             "coords": {
                 "x": float(row["projection_x"]),
                 "y": float(row["projection_y"]),
@@ -584,6 +650,8 @@ def _build_state(args: argparse.Namespace) -> ExplorerState:
         available_algorithms=available_algorithms,
         default_algorithm=available_algorithms[0],
         recommendation_count=max(1, int(args.recommendations)),
+        deezer_track_ids_by_id=deezer_track_ids_by_id,
+        prefer_deezer_previews=bool(getattr(args, "prefer_deezer_previews", True)),
     )
 
 
@@ -776,7 +844,39 @@ def _build_handler(state: ExplorerState) -> type[BaseHTTPRequestHandler]:
                 status=status,
             )
 
+        def _get_cached_deezer_preview(self, song_id: str) -> str | None:
+            """Return a cached preview URL, resolving it via the Deezer API if needed."""
+            state = self.explorer_state
+            with state.preview_cache_lock:
+                if song_id in state.deezer_preview_cache:
+                    return state.deezer_preview_cache[song_id]
+
+            track_id = state.deezer_track_ids_by_id.get(song_id, "")
+            preview_url = _resolve_deezer_preview(track_id) if track_id else None
+
+            with state.preview_cache_lock:
+                # Cache both hits and misses; misses expire when the server restarts.
+                state.deezer_preview_cache[song_id] = preview_url
+            return preview_url
+
+        def _redirect_to(self, url: str) -> None:
+            self.send_response(HTTPStatus.FOUND.value)
+            self.send_header("Location", url)
+            self.send_header("Content-Length", "0")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+
         def _serve_audio(self, song_id: str, head_only: bool = False) -> None:
+            state = self.explorer_state
+
+            # Prefer streaming from the Deezer CDN so the dashboard works on
+            # any machine, not just the one that did the downloads.
+            if state.prefer_deezer_previews and song_id in state.deezer_track_ids_by_id:
+                preview_url = self._get_cached_deezer_preview(song_id)
+                if preview_url:
+                    self._redirect_to(preview_url)
+                    return
+
             audio_path = self.explorer_state.audio_paths_by_id.get(song_id)
             if audio_path is None or not audio_path.exists():
                 self._write_json({"error": f"No audio found for {song_id}"}, status=HTTPStatus.NOT_FOUND)
