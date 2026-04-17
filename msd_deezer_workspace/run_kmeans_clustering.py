@@ -5,11 +5,18 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from joblib import Parallel, delayed
 from kneed import KneeLocator
 from sklearn.cluster import KMeans
 from sklearn.metrics import calinski_harabasz_score, davies_bouldin_score, silhouette_score
 from sklearn.neighbors import LocalOutlierFactor
 from sklearn.preprocessing import normalize
+
+try:
+    from tqdm.auto import tqdm
+except ImportError:  # graceful fallback if tqdm is not installed
+    def tqdm(iterable, total=None, desc=None, **_kwargs):
+        return iterable
 
 from clustering.shared import (
     DEFAULT_CLUSTER_OUTPUT_DIR,
@@ -39,6 +46,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--umap-n-neighbors", type=int, default=40, help="UMAP n_neighbors parameter.")
     parser.add_argument("--umap-min-dist", type=float, default=0.01, help="UMAP min_dist parameter.")
     parser.add_argument("--disable-umap", action="store_true", help="Skip UMAP and cluster on PCA output directly.")
+    parser.add_argument("--workers", type=int, default=8, help="Number of parallel workers for the KMeans grid search (default: 8).")
     return parser.parse_args()
 
 
@@ -65,10 +73,53 @@ def compute_bic(x: np.ndarray, model: KMeans) -> float:
     return float(n * np.log(rss / n + 1e-12) + k * d * np.log(n))
 
 
+def _fit_kmeans_candidate(
+    cluster_count: int,
+    x: np.ndarray,
+    random_state: int,
+    silhouette_sample_size: int,
+) -> tuple[int, KMeans | None, dict[str, float | int] | None]:
+    """Fit one KMeans candidate and score it. Module-level so joblib can pickle it."""
+    model = KMeans(
+        n_clusters=cluster_count,
+        random_state=random_state,
+        n_init=20,
+        max_iter=500,
+    )
+    labels = model.fit_predict(x)
+    if len(np.unique(labels)) < 2:
+        return cluster_count, None, None
+
+    cluster_sizes = np.bincount(labels, minlength=cluster_count)
+    silhouette = float(
+        silhouette_score(
+            x, labels,
+            sample_size=silhouette_sample_size,
+            random_state=random_state,
+        )
+    )
+    calinski = float(calinski_harabasz_score(x, labels))
+    davies = float(davies_bouldin_score(x, labels))
+    inertia = float(model.inertia_)
+    bic = compute_bic(x, model)
+
+    record = {
+        "cluster_count": int(cluster_count),
+        "silhouette_score": silhouette,
+        "calinski_harabasz_score": calinski,
+        "davies_bouldin_score": davies,
+        "inertia": inertia,
+        "bic": bic,
+        "min_cluster_size": int(cluster_sizes.min()),
+    }
+    return cluster_count, model, record
+
+
 def select_best_kmeans(
     dataset: PreparedDataset,
     max_clusters: int,
     random_state: int,
+    workers: int = 8,
 ) -> tuple[KMeans, pd.DataFrame, np.ndarray]:
     raw_x = dataset.reduced_matrix
 
@@ -91,43 +142,25 @@ def select_best_kmeans(
     models: dict[int, KMeans] = {}
     silhouette_sample_size = min(len(x), 2000)
 
-    for cluster_count in candidates:
-        model = KMeans(
-            n_clusters=cluster_count,
-            random_state=random_state,
-            n_init=20,
-            max_iter=500,
-        )
-        labels = model.fit_predict(x)
-        unique_labels = np.unique(labels)
-        if len(unique_labels) < 2:
+    jobs = [
+        delayed(_fit_kmeans_candidate)(k, x, random_state, silhouette_sample_size)
+        for k in candidates
+    ]
+    print(f"[KMeans] Fitting {len(jobs)} candidate(s) using {workers} worker(s)")
+    try:
+        results_iter = Parallel(
+            n_jobs=workers, return_as="generator_unordered",
+        )(jobs)
+    except TypeError:
+        # joblib < 1.3: no generator return mode, fall back to list
+        results_iter = Parallel(n_jobs=workers)(jobs)
+
+    for cluster_count, model, record in tqdm(
+        results_iter, total=len(jobs), desc="[KMeans] Grid search",
+    ):
+        if model is None or record is None:
             continue
-
-        cluster_sizes = np.bincount(labels, minlength=cluster_count)
-        silhouette = float(
-            silhouette_score(
-                x, labels,
-                sample_size=silhouette_sample_size,
-                random_state=random_state,
-            )
-        )
-        calinski = float(calinski_harabasz_score(x, labels))
-        davies = float(davies_bouldin_score(x, labels))
-        inertia = float(model.inertia_)
-        bic = compute_bic(x, model)
-        min_cluster_size = int(cluster_sizes.min())
-
-        records.append(
-            {
-                "cluster_count": int(cluster_count),
-                "silhouette_score": silhouette,
-                "calinski_harabasz_score": calinski,
-                "davies_bouldin_score": davies,
-                "inertia": inertia,
-                "bic": bic,
-                "min_cluster_size": min_cluster_size,
-            }
-        )
+        records.append(record)
         models[int(cluster_count)] = model
 
     if not models:
@@ -257,6 +290,7 @@ def main() -> None:
         dataset=dataset,
         max_clusters=args.max_clusters,
         random_state=args.random_state,
+        workers=args.workers,
     )
     payload = build_outputs(dataset, model, metrics_frame, inlier_mask, output_dir)
     print(payload)

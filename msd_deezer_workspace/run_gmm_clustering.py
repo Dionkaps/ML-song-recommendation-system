@@ -5,8 +5,15 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from joblib import Parallel, delayed
 from sklearn.metrics import silhouette_samples, silhouette_score
 from sklearn.mixture import BayesianGaussianMixture
+
+try:
+    from tqdm.auto import tqdm
+except ImportError:  # graceful fallback if tqdm is not installed
+    def tqdm(iterable, total=None, desc=None, **_kwargs):
+        return iterable
 
 from clustering.shared import (
     DEFAULT_CLUSTER_OUTPUT_DIR,
@@ -37,6 +44,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--umap-n-neighbors", type=int, default=40, help="UMAP n_neighbors parameter.")
     parser.add_argument("--umap-min-dist", type=float, default=0.01, help="UMAP min_dist parameter.")
     parser.add_argument("--disable-umap", action="store_true", help="Skip UMAP and cluster on PCA output directly.")
+    parser.add_argument("--workers", type=int, default=8, help="Number of parallel workers for the BGMM grid search (default: 8).")
     return parser.parse_args()
 
 
@@ -82,10 +90,77 @@ def soft_silhouette_score(
     return float(np.average(sil, weights=conf))
 
 
+def _fit_bgmm_candidate(
+    covariance_type: str,
+    n_comp: int,
+    concentration_prior: float,
+    x: np.ndarray,
+    reg_covar: float,
+    silhouette_sample_size: int,
+    random_state: int,
+) -> tuple[
+    BayesianGaussianMixture | None,
+    np.ndarray | None,
+    np.ndarray | None,
+    dict[str, float | int | str] | None,
+    float | None,
+]:
+    """Fit one BGMM candidate. Module-level so joblib can pickle it."""
+    model = BayesianGaussianMixture(
+        n_components=n_comp,
+        covariance_type=covariance_type,
+        weight_concentration_prior_type="dirichlet_process",
+        weight_concentration_prior=concentration_prior,
+        n_init=3,
+        max_iter=500,
+        reg_covar=reg_covar,
+        random_state=random_state,
+    )
+    try:
+        model.fit(x)
+    except ValueError:
+        return None, None, None, None, None
+
+    labels = model.predict(x)
+    effective_count = int(len(np.unique(labels)))
+    if effective_count < 2:
+        return None, None, None, None, None
+
+    active_components = int((model.weights_ > WEIGHT_THRESHOLD).sum())
+    probabilities = model.predict_proba(x)
+    lower_bound = float(np.asarray(model.lower_bound_).item())
+
+    silhouette = float(
+        silhouette_score(
+            x, labels,
+            sample_size=silhouette_sample_size,
+            random_state=random_state,
+        )
+    )
+    confidences = probabilities.max(axis=1)
+    soft_sil = soft_silhouette_score(
+        x, labels, confidences, silhouette_sample_size, random_state,
+    )
+    record = {
+        "covariance_type": covariance_type,
+        "weight_concentration_prior": float(concentration_prior),
+        "max_components": n_comp,
+        "effective_components": effective_count,
+        "active_components": active_components,
+        "lower_bound": lower_bound,
+        "silhouette_score": silhouette,
+        "soft_silhouette_score": soft_sil,
+        "mean_membership_confidence": float(confidences.mean()),
+        "reg_covar": reg_covar,
+    }
+    return model, labels, probabilities, record, soft_sil
+
+
 def select_best_bgmm(
     dataset: PreparedDataset,
     max_components: int,
     random_state: int,
+    workers: int = 8,
 ) -> tuple[BayesianGaussianMixture, np.ndarray, np.ndarray, pd.DataFrame]:
     x = dataset.reduced_matrix
     silhouette_sample_size = min(len(x), 2000)
@@ -104,79 +179,35 @@ def select_best_bgmm(
     concentration_priors = (0.01, 1.0, 100.0, 500.0)
     component_caps = (10, 15, 20, 25, 30, 40, 50, 60)
 
-    total = len(covariance_types) * len(component_caps) * len(concentration_priors)
-    progress = 0
+    jobs = [
+        delayed(_fit_bgmm_candidate)(
+            cov, n_comp, conc, x, reg_covar, silhouette_sample_size, random_state,
+        )
+        for cov in covariance_types
+        for n_comp in component_caps
+        for conc in concentration_priors
+    ]
+    print(f"[GMM] Fitting {len(jobs)} candidate(s) using {workers} worker(s)")
+    try:
+        results_iter = Parallel(
+            n_jobs=workers, return_as="generator_unordered",
+        )(jobs)
+    except TypeError:
+        results_iter = Parallel(n_jobs=workers)(jobs)
 
-    for covariance_type in covariance_types:
-        for n_comp in component_caps:
-            for concentration_prior in concentration_priors:
-                progress += 1
-                if progress % 12 == 0:
-                    print(f"[GMM] Grid search progress: {progress}/{total}")
+    for model, labels, probabilities, record, soft_sil in tqdm(
+        results_iter, total=len(jobs), desc="[GMM] Grid search",
+    ):
+        if model is None or record is None:
+            continue
+        records.append(record)
 
-                model = BayesianGaussianMixture(
-                    n_components=n_comp,
-                    covariance_type=covariance_type,
-                    weight_concentration_prior_type="dirichlet_process",
-                    weight_concentration_prior=concentration_prior,
-                    n_init=3,
-                    max_iter=500,
-                    reg_covar=reg_covar,
-                    random_state=random_state,
-                )
-                try:
-                    model.fit(x)
-                except ValueError:
-                    continue
-
-                labels = model.predict(x)
-                effective_count = int(len(np.unique(labels)))
-                if effective_count < 2:
-                    continue
-
-                active_mask = model.weights_ > WEIGHT_THRESHOLD
-                active_components = int(active_mask.sum())
-
-                probabilities = model.predict_proba(x)
-                lower_bound = float(np.asarray(model.lower_bound_).item())
-
-                silhouette = float(
-                    silhouette_score(
-                        x, labels,
-                        sample_size=silhouette_sample_size,
-                        random_state=random_state,
-                    )
-                )
-
-                # Item 12 – soft silhouette for selection
-                confidences = probabilities.max(axis=1)
-                soft_sil = soft_silhouette_score(
-                    x, labels, confidences,
-                    silhouette_sample_size, random_state,
-                )
-                mean_confidence = float(confidences.mean())
-
-                records.append(
-                    {
-                        "covariance_type": covariance_type,
-                        "weight_concentration_prior": float(concentration_prior),
-                        "max_components": n_comp,
-                        "effective_components": effective_count,
-                        "active_components": active_components,
-                        "lower_bound": lower_bound,
-                        "silhouette_score": silhouette,
-                        "soft_silhouette_score": soft_sil,
-                        "mean_membership_confidence": mean_confidence,
-                        "reg_covar": reg_covar,
-                    }
-                )
-
-                # Item 12 – select by soft silhouette
-                if best_key is None or soft_sil > best_key:
-                    best_key = soft_sil
-                    best_model = model
-                    best_labels = labels
-                    best_probabilities = probabilities
+        # Item 12 – select by soft silhouette
+        if best_key is None or soft_sil > best_key:
+            best_key = soft_sil
+            best_model = model
+            best_labels = labels
+            best_probabilities = probabilities
 
     if best_model is None or best_labels is None or best_probabilities is None:
         raise RuntimeError("Bayesian GMM automatic selection could not find a valid clustering solution.")
@@ -345,6 +376,7 @@ def main() -> None:
         dataset=dataset,
         max_components=args.max_components,
         random_state=args.random_state,
+        workers=args.workers,
     )
     payload = build_outputs(dataset, model, labels, probabilities, metrics_frame, output_dir)
     print(payload)

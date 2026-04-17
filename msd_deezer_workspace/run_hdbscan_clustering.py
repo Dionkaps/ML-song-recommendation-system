@@ -6,8 +6,15 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from joblib import Parallel, delayed
 from sklearn.cluster import HDBSCAN
 from sklearn.metrics import silhouette_score
+
+try:
+    from tqdm.auto import tqdm
+except ImportError:  # graceful fallback if tqdm is not installed
+    def tqdm(iterable, total=None, desc=None, **_kwargs):
+        return iterable
 
 from clustering.shared import (
     DEFAULT_CLUSTER_OUTPUT_DIR,
@@ -34,6 +41,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--umap-n-neighbors", type=int, default=40, help="UMAP n_neighbors parameter.")
     parser.add_argument("--umap-min-dist", type=float, default=0.01, help="UMAP min_dist parameter.")
     parser.add_argument("--disable-umap", action="store_true", help="Skip UMAP and cluster on PCA output directly.")
+    parser.add_argument("--workers", type=int, default=8, help="Number of parallel workers for the HDBSCAN grid search (default: 8).")
     return parser.parse_args()
 
 
@@ -67,7 +75,49 @@ def build_hdbscan_candidates(n_samples: int) -> list[tuple[int, int, str]]:
     return sorted(candidates, key=lambda t: (t[0], t[1], 0 if t[2] == "eom" else 1))
 
 
-def select_best_hdbscan(dataset: PreparedDataset) -> tuple[HDBSCAN, np.ndarray, pd.DataFrame]:
+def _fit_hdbscan_candidate(
+    min_cluster_size: int,
+    min_samples: int,
+    cluster_selection_method: str,
+    x: np.ndarray,
+) -> tuple[HDBSCAN, np.ndarray, dict[str, float | int | None]]:
+    """Fit one HDBSCAN candidate and score it. Module-level so joblib can pickle it."""
+    model = HDBSCAN(
+        min_cluster_size=min_cluster_size,
+        min_samples=min_samples,
+        metric="euclidean",
+        cluster_selection_method=cluster_selection_method,
+    )
+    labels = model.fit_predict(x)
+    clustered_mask = labels != -1
+    cluster_count = int(len(set(labels[clustered_mask]))) if clustered_mask.any() else 0
+    clustered_fraction = float(clustered_mask.mean())
+    noise_fraction = 1.0 - clustered_fraction
+    sil_score = np.nan
+
+    if cluster_count >= 2 and clustered_mask.sum() > cluster_count:
+        try:
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", category=RuntimeWarning)
+                sil_score = float(silhouette_score(x[clustered_mask], labels[clustered_mask]))
+        except Exception:
+            sil_score = np.nan
+
+    record = {
+        "min_cluster_size": int(min_cluster_size),
+        "min_samples": int(min_samples),
+        "cluster_selection_method": cluster_selection_method,
+        "cluster_count": cluster_count,
+        "clustered_fraction": clustered_fraction,
+        "noise_fraction": noise_fraction,
+        "silhouette_score": sil_score,
+    }
+    return model, labels, record
+
+
+def select_best_hdbscan(
+    dataset: PreparedDataset, workers: int = 8,
+) -> tuple[HDBSCAN, np.ndarray, pd.DataFrame]:
     x = dataset.reduced_matrix
     candidates = build_hdbscan_candidates(len(x))
     records: list[dict[str, float | int | None]] = []
@@ -78,44 +128,31 @@ def select_best_hdbscan(dataset: PreparedDataset) -> tuple[HDBSCAN, np.ndarray, 
     fallback_labels: np.ndarray | None = None
     fallback_key: tuple[float,] | None = None
 
-    print(f"[HDBSCAN] Evaluating {len(candidates)} hyperparameter combinations")
+    print(
+        f"[HDBSCAN] Evaluating {len(candidates)} hyperparameter combinations "
+        f"using {workers} worker(s)"
+    )
 
-    for idx, (min_cluster_size, min_samples, cluster_selection_method) in enumerate(candidates):
-        if (idx + 1) % 20 == 0:
-            print(f"[HDBSCAN] Progress: {idx + 1}/{len(candidates)}")
+    jobs = [
+        delayed(_fit_hdbscan_candidate)(mcs, ms, method, x)
+        for (mcs, ms, method) in candidates
+    ]
+    try:
+        results_iter = Parallel(
+            n_jobs=workers, return_as="generator_unordered",
+        )(jobs)
+    except TypeError:
+        results_iter = Parallel(n_jobs=workers)(jobs)
 
-        model = HDBSCAN(
-            min_cluster_size=min_cluster_size,
-            min_samples=min_samples,
-            metric="euclidean",
-            cluster_selection_method=cluster_selection_method,
-        )
-        labels = model.fit_predict(x)
-        clustered_mask = labels != -1
-        cluster_count = int(len(set(labels[clustered_mask]))) if clustered_mask.any() else 0
-        clustered_fraction = float(clustered_mask.mean())
-        noise_fraction = 1.0 - clustered_fraction
-        sil_score = np.nan
+    for model, labels, record in tqdm(
+        results_iter, total=len(jobs), desc="[HDBSCAN] Grid search",
+    ):
+        records.append(record)
 
-        if cluster_count >= 2 and clustered_mask.sum() > cluster_count:
-            try:
-                with warnings.catch_warnings():
-                    warnings.filterwarnings("ignore", category=RuntimeWarning)
-                    sil_score = float(silhouette_score(x[clustered_mask], labels[clustered_mask]))
-            except Exception:
-                sil_score = np.nan
-
-        records.append(
-            {
-                "min_cluster_size": int(min_cluster_size),
-                "min_samples": int(min_samples),
-                "cluster_selection_method": cluster_selection_method,
-                "cluster_count": cluster_count,
-                "clustered_fraction": clustered_fraction,
-                "noise_fraction": noise_fraction,
-                "silhouette_score": sil_score,
-            }
-        )
+        clustered_fraction = record["clustered_fraction"]
+        noise_fraction = record["noise_fraction"]
+        cluster_count = record["cluster_count"]
+        sil_score = record["silhouette_score"]
 
         fallback_score = (clustered_fraction,)
         if fallback_key is None or fallback_score > fallback_key:
@@ -129,7 +166,7 @@ def select_best_hdbscan(dataset: PreparedDataset) -> tuple[HDBSCAN, np.ndarray, 
         selection_validity = sil_score if np.isfinite(sil_score) else -1.0
 
         # Item 16 – small bonus for "eom" (Excess of Mass) method
-        eom_bonus = 0.01 if cluster_selection_method == "eom" else 0.0
+        eom_bonus = 0.01 if record["cluster_selection_method"] == "eom" else 0.0
 
         selection_key = (selection_validity + eom_bonus, clustered_fraction, -noise_fraction)
         if best_key is None or selection_key > best_key:
@@ -296,7 +333,7 @@ def main() -> None:
         umap_min_dist=args.umap_min_dist,
         disable_umap=args.disable_umap,
     )
-    model, labels, metrics_frame = select_best_hdbscan(dataset)
+    model, labels, metrics_frame = select_best_hdbscan(dataset, workers=args.workers)
     payload = build_outputs(dataset, model, labels, metrics_frame, output_dir)
     print(payload)
 
