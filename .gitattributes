@@ -1,1 +1,2 @@
 msd_deezer_workspace/pretrained_embeddings/feature_vectors.csv filter=lfs diff=lfs merge=lfs -text
+msd_deezer_workspace/features/feature_vectors.csv filter=lfs diff=lfs merge=lfs -text

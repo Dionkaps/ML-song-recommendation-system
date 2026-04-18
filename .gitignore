@@ -23,7 +23,6 @@ Thumbs.db
 /msd_deezer_workspace/cache/
 /msd_deezer_workspace/logs/
 /msd_deezer_workspace/features/raw/
-/msd_deezer_workspace/features/feature_vectors.csv
 /msd_deezer_workspace/sample_runs/
 /msd_deezer_workspace/data/*.tmp
 /msd_deezer_workspace/data/*.pending.csv
