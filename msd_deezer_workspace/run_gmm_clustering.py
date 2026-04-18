@@ -16,9 +16,9 @@ except ImportError:  # graceful fallback if tqdm is not installed
         return iterable
 
 from clustering.shared import (
-    DEFAULT_CLUSTER_OUTPUT_DIR,
     DEFAULT_FEATURES_DIR,
     PreparedDataset,
+    default_algorithm_output_dir,
     ensure_output_dir,
     prepare_dataset,
     write_assignments,
@@ -26,15 +26,13 @@ from clustering.shared import (
 )
 
 
-DEFAULT_OUTPUT_DIR = DEFAULT_CLUSTER_OUTPUT_DIR / "gmm"
-
 WEIGHT_THRESHOLD = 0.002
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run automatic Bayesian Gaussian Mixture clustering on extracted audio features.")
     parser.add_argument("--features-path", default=str(DEFAULT_FEATURES_DIR), help="Path to the features directory or feature summary CSV.")
-    parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR), help="Directory where GMM outputs will be stored.")
+    parser.add_argument("--output-dir", default=None, help="Directory for GMM outputs. Defaults to cluster_results/<feature_source>/gmm so pretrained-embedding and audio-feature runs stay separate.")
     parser.add_argument("--limit", type=int, help="Optional cap on how many songs to cluster.")
     parser.add_argument("--max-components", type=int, default=80, help="Upper bound on component count; the Dirichlet Process determines the effective number.")
     parser.add_argument("--random-state", type=int, default=42, help="Random seed for reproducibility.")
@@ -360,7 +358,8 @@ def build_outputs(
 
 def main() -> None:
     args = parse_args()
-    output_dir = ensure_output_dir(args.output_dir)
+    resolved_output_dir = args.output_dir or default_algorithm_output_dir(args.features_path, "gmm")
+    output_dir = ensure_output_dir(resolved_output_dir)
     dataset = prepare_dataset(
         features_path=args.features_path,
         limit=args.limit,

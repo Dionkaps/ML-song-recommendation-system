@@ -18,6 +18,7 @@ PROJECT_ROOT = WORKSPACE_DIR.parent
 DEFAULT_SOURCE_SCRIPT = WORKSPACE_DIR / "msd_deezer_pipeline.py"
 DEFAULT_SUBSET_DIR = PROJECT_ROOT / "millionsongsubset" / "MillionSongSubset"
 DEFAULT_CSV_PATH = WORKSPACE_DIR / "data" / "msd_deezer_matches.csv"
+DEFAULT_CATALOG_CSV_PATH = WORKSPACE_DIR / "data" / "msd_deezer_catalog.csv"
 DEFAULT_AUDIO_DIR = WORKSPACE_DIR / "audio"
 
 
@@ -31,7 +32,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--python", default=sys.executable, help="Python executable used to launch the subprocess.")
     parser.add_argument("--source-script", default=str(DEFAULT_SOURCE_SCRIPT), help="Path to the pipeline script.")
     parser.add_argument("--subset-dir", default=str(DEFAULT_SUBSET_DIR), help="Path to the MillionSongSubset folder.")
-    parser.add_argument("--csv-path", default=str(DEFAULT_CSV_PATH), help="Path to the output CSV.")
+    parser.add_argument("--csv-path", default=str(DEFAULT_CSV_PATH), help="Path to the working CSV (holds Deezer download progress).")
+    parser.add_argument(
+        "--catalog-csv-path",
+        default=str(DEFAULT_CATALOG_CSV_PATH),
+        help="Path to the pristine MSD catalog CSV used to reseed fresh download runs.",
+    )
     parser.add_argument("--audio-dir", default=str(DEFAULT_AUDIO_DIR), help="Directory containing downloaded audio files.")
     parser.add_argument("--chunk-size", type=int, default=500, help="How many songs each subprocess session should attempt.")
     parser.add_argument("--idle-timeout-sec", type=int, default=240, help="Kill and restart the subprocess if it produces no activity for this long.")
@@ -190,6 +196,7 @@ def build_command(
     source_script: Path,
     subset_dir: Path,
     csv_path: Path,
+    catalog_csv_path: Path,
     audio_dir: Path,
     start_index: int,
     limit: int,
@@ -202,6 +209,8 @@ def build_command(
         str(subset_dir),
         "--csv-path",
         str(csv_path),
+        "--catalog-csv-path",
+        str(catalog_csv_path),
         "--audio-dir",
         str(audio_dir),
         "--start-index",
@@ -218,7 +227,10 @@ def build_command(
         str(max(0.0, float(args.max_songs_per_sec))),
     ]
 
-    if csv_path.exists():
+    # Skip the HDF5 extraction step whenever we have *any* seed CSV --
+    # either a populated working CSV (resume) or just the catalog (fresh
+    # start via pipeline-internal seeding).
+    if csv_path.exists() or catalog_csv_path.exists():
         command.append("--skip-extract")
     if args.retry_no_match:
         command.append("--retry-no-match")
@@ -240,6 +252,7 @@ def main() -> None:
     source_script = Path(args.source_script).resolve()
     subset_dir = Path(args.subset_dir).resolve()
     csv_path = Path(args.csv_path).resolve()
+    catalog_csv_path = Path(args.catalog_csv_path).resolve()
     audio_dir = Path(args.audio_dir).resolve()
     log_dir = ensure_log_dir(args.log_dir)
     run_summary_path = log_dir / "run_summary.json"
@@ -249,11 +262,15 @@ def main() -> None:
 
     csv_progress = load_csv_progress(csv_path) if csv_path.exists() else {"total": 0}
     total_catalog_rows = int(csv_progress.get("total", 0) or 0)
+    if total_catalog_rows <= 0 and catalog_csv_path.exists():
+        catalog_progress = load_csv_progress(catalog_csv_path)
+        total_catalog_rows = int(catalog_progress.get("total", 0) or 0)
     if total_catalog_rows <= 0:
         if not subset_dir.exists():
             raise FileNotFoundError(
-                f"No CSV found at {csv_path} and subset directory not found at {subset_dir}. "
-                "Either provide a pre-built CSV or a valid --subset-dir."
+                f"No working CSV at {csv_path}, no catalog CSV at {catalog_csv_path}, and subset "
+                f"directory not found at {subset_dir}. Provide a pre-built catalog or a valid "
+                f"--subset-dir."
             )
         total_catalog_rows = count_subset_rows(subset_dir)
 
@@ -303,6 +320,7 @@ def main() -> None:
             source_script=source_script,
             subset_dir=subset_dir,
             csv_path=csv_path,
+            catalog_csv_path=catalog_csv_path,
             audio_dir=audio_dir,
             start_index=session_start_index,
             limit=session_limit,

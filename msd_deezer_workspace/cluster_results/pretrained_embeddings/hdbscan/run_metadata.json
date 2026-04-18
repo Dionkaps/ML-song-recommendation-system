@@ -1,0 +1,20 @@
+{
+  "algorithm": "hdbscan",
+  "cluster_count": 18,
+  "samples": 8128,
+  "original_noise_points": 4123,
+  "noise_reassigned": true,
+  "reassignment_method": "glosh_inspired_soft",
+  "feature_source": "/storage/data4/up1072603/projects/ML-song-recommendation-system/msd_deezer_workspace/pretrained_embeddings",
+  "summary_csv_path": "/storage/data4/up1072603/projects/ML-song-recommendation-system/msd_deezer_workspace/pretrained_embeddings/feature_vectors.csv",
+  "pca_components": 100,
+  "pca_explained_variance_ratio": 0.8358235919990478,
+  "umap_components": 15,
+  "umap_n_neighbors": 40,
+  "umap_min_dist": 0.01,
+  "clustering_dimensions": 15,
+  "min_cluster_size": 81,
+  "min_samples": 27,
+  "cluster_selection_method": "leaf",
+  "silhouette_score_clustered_only": 0.6125386357307434
+}

@@ -17,9 +17,9 @@ except ImportError:  # graceful fallback if tqdm is not installed
         return iterable
 
 from clustering.shared import (
-    DEFAULT_CLUSTER_OUTPUT_DIR,
     DEFAULT_FEATURES_DIR,
     PreparedDataset,
+    default_algorithm_output_dir,
     ensure_output_dir,
     prepare_dataset,
     write_assignments,
@@ -27,13 +27,10 @@ from clustering.shared import (
 )
 
 
-DEFAULT_OUTPUT_DIR = DEFAULT_CLUSTER_OUTPUT_DIR / "hdbscan"
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run automatic HDBSCAN clustering on extracted audio features.")
     parser.add_argument("--features-path", default=str(DEFAULT_FEATURES_DIR), help="Path to the features directory or feature summary CSV.")
-    parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR), help="Directory where HDBSCAN outputs will be stored.")
+    parser.add_argument("--output-dir", default=None, help="Directory for HDBSCAN outputs. Defaults to cluster_results/<feature_source>/hdbscan so pretrained-embedding and audio-feature runs stay separate.")
     parser.add_argument("--limit", type=int, help="Optional cap on how many songs to cluster.")
     parser.add_argument("--pca-variance-threshold", type=float, default=0.99, help="Explained variance target used for PCA reduction.")
     parser.add_argument("--max-pca-components", type=int, default=100, help="Maximum PCA dimensions kept for clustering.")
@@ -323,7 +320,8 @@ def build_outputs(
 
 def main() -> None:
     args = parse_args()
-    output_dir = ensure_output_dir(args.output_dir)
+    resolved_output_dir = args.output_dir or default_algorithm_output_dir(args.features_path, "hdbscan")
+    output_dir = ensure_output_dir(resolved_output_dir)
     dataset = prepare_dataset(
         features_path=args.features_path,
         limit=args.limit,

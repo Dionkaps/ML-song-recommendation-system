@@ -26,6 +26,7 @@ except ImportError:  # pragma: no cover
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_SUBSET_DIR = SCRIPT_DIR.parent / "millionsongsubset" / "MillionSongSubset"
 DEFAULT_CSV_PATH = SCRIPT_DIR / "data" / "msd_deezer_matches.csv"
+DEFAULT_CATALOG_CSV_PATH = SCRIPT_DIR / "data" / "msd_deezer_catalog.csv"
 DEFAULT_AUDIO_DIR = SCRIPT_DIR / "audio"
 DEFAULT_CACHE_PATH = SCRIPT_DIR / "cache" / "deezer_search_cache.json"
 
@@ -317,6 +318,32 @@ def load_csv_rows(csv_path: Path) -> list[dict[str, str]]:
                 row[field] = clean_optional_text(raw_row.get(field, ""))
             rows.append(row)
     return rows
+
+
+def strip_deezer_columns(row: dict[str, str]) -> dict[str, str]:
+    pristine = make_blank_row()
+    for field in CSV_FIELDNAMES:
+        if field.startswith("deezer_"):
+            continue
+        pristine[field] = clean_optional_text(row.get(field, ""))
+    return pristine
+
+
+def write_catalog_csv(rows: list[dict[str, str]], catalog_path: Path) -> None:
+    pristine_rows = [strip_deezer_columns(row) for row in rows]
+    atomic_write_rows(pristine_rows, catalog_path)
+
+
+def seed_working_csv_from_catalog(catalog_path: Path, working_path: Path) -> list[dict[str, str]]:
+    # Used on machines without the MillionSongSubset HDF5 (e.g. the DGX after a
+    # reset). Produces a pristine working CSV with all deezer_* columns blank so
+    # the next download run starts from row 0 without resuming prior state.
+    catalog_rows = load_csv_rows(catalog_path)
+    if not catalog_rows:
+        raise FileNotFoundError(f"Catalog CSV is missing or empty: {catalog_path}")
+    pristine_rows = [strip_deezer_columns(row) for row in catalog_rows]
+    atomic_write_rows(pristine_rows, working_path)
+    return pristine_rows
 
 
 def load_existing_row_map(csv_path: Path) -> dict[str, dict[str, str]]:
@@ -902,7 +929,12 @@ def extract_song_row(file_path: Path, subset_dir: Path, existing_row: dict[str, 
     return row
 
 
-def extract_metadata_csv(subset_dir: Path, csv_path: Path, preserve_existing: bool) -> tuple[list[dict[str, str]], list[str]]:
+def extract_metadata_csv(
+    subset_dir: Path,
+    csv_path: Path,
+    catalog_csv_path: Path,
+    preserve_existing: bool,
+) -> tuple[list[dict[str, str]], list[str]]:
     if not subset_dir.exists():
         raise FileNotFoundError(f"Subset directory does not exist: {subset_dir}")
 
@@ -926,6 +958,7 @@ def extract_metadata_csv(subset_dir: Path, csv_path: Path, preserve_existing: bo
             errors.append(f"{file_path}: {exc}")
 
     atomic_write_rows(extracted_rows, csv_path)
+    write_catalog_csv(extracted_rows, catalog_csv_path)
     return extracted_rows, errors
 
 
@@ -1142,7 +1175,17 @@ def parse_args() -> argparse.Namespace:
         description="Extract Million Song Subset metadata and enrich it with Deezer matches and preview downloads."
     )
     parser.add_argument("--subset-dir", type=Path, default=DEFAULT_SUBSET_DIR, help="Path to the MillionSongSubset folder.")
-    parser.add_argument("--csv-path", type=Path, default=DEFAULT_CSV_PATH, help="Path to the output CSV.")
+    parser.add_argument("--csv-path", type=Path, default=DEFAULT_CSV_PATH, help="Path to the working CSV (holds Deezer download progress).")
+    parser.add_argument(
+        "--catalog-csv-path",
+        type=Path,
+        default=DEFAULT_CATALOG_CSV_PATH,
+        help=(
+            "Path to the pristine MSD catalog CSV (only msd_* columns filled). Written alongside the "
+            "working CSV during extraction and used to reseed a fresh download run when the working "
+            "CSV is deleted (e.g. after reset_msd_deezer_workspace.py --targets download_state)."
+        ),
+    )
     parser.add_argument("--audio-dir", type=Path, default=DEFAULT_AUDIO_DIR, help="Folder for downloaded preview MP3 files.")
     parser.add_argument("--cache-path", type=Path, default=DEFAULT_CACHE_PATH, help="Path to the Deezer search cache JSON.")
     parser.add_argument("--skip-extract", action="store_true", help="Skip the HDF5-to-CSV extraction step.")
@@ -1175,6 +1218,7 @@ def main() -> int:
     args = parse_args()
     subset_dir = args.subset_dir.resolve()
     csv_path = args.csv_path.resolve()
+    catalog_csv_path = args.catalog_csv_path.resolve()
     audio_dir = args.audio_dir.resolve()
     cache_path = args.cache_path.resolve()
 
@@ -1182,21 +1226,42 @@ def main() -> int:
     extraction_errors: list[str] = []
 
     if args.skip_extract:
-        rows = load_csv_rows(csv_path)
-        if not rows:
-            raise FileNotFoundError(f"CSV not found or empty: {csv_path}")
+        if not csv_path.exists():
+            if not catalog_csv_path.exists():
+                raise FileNotFoundError(
+                    f"Neither the working CSV ({csv_path}) nor the catalog CSV ({catalog_csv_path}) "
+                    "exists. Run the full pipeline once with --subset-dir pointing at the "
+                    "MillionSongSubset (no --skip-extract) to build the catalog."
+                )
+            rows = seed_working_csv_from_catalog(catalog_csv_path, csv_path)
+            log_info(
+                f"SEED WORKING CSV | rows={len(rows)} | from={catalog_csv_path} -> {csv_path}"
+            )
+        else:
+            rows = load_csv_rows(csv_path)
+            if not rows:
+                raise FileNotFoundError(f"CSV not found or empty: {csv_path}")
+            # One-time backfill: if an existing working CSV predates the
+            # catalog-split change, write a pristine catalog alongside so
+            # future resets can reseed without the HDF5.
+            if not catalog_csv_path.exists():
+                write_catalog_csv(rows, catalog_csv_path)
+                log_info(
+                    f"BACKFILL CATALOG | rows={len(rows)} | path={catalog_csv_path}"
+                )
         log_info(f"LOAD CSV | rows={len(rows)} | path={csv_path}")
     else:
         extract_start = time.time()
         rows, extraction_errors = extract_metadata_csv(
             subset_dir=subset_dir,
             csv_path=csv_path,
+            catalog_csv_path=catalog_csv_path,
             preserve_existing=not args.force_rebuild_csv,
         )
         extract_elapsed = time.time() - extract_start
         log_info(
             f"EXTRACT DONE | rows={len(rows)} | errors={len(extraction_errors)} | "
-            f"duration={_fmt_duration(extract_elapsed)} | path={csv_path}"
+            f"duration={_fmt_duration(extract_elapsed)} | working={csv_path} | catalog={catalog_csv_path}"
         )
         if extraction_errors:
             for message in extraction_errors[:10]:

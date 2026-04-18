@@ -27,6 +27,9 @@ Thumbs.db
 /msd_deezer_workspace/sample_runs/
 /msd_deezer_workspace/data/*.tmp
 /msd_deezer_workspace/data/*.pending.csv
+# Deezer download working state -- msd_deezer_catalog.csv is the committed seed,
+# the working CSV is regenerated from it on every fresh run.
+/msd_deezer_workspace/data/msd_deezer_matches.csv
 /calendar/
 
 # Per-song NPZ dump (tens of GB) -- the fused + per-model CSVs beside it stay tracked

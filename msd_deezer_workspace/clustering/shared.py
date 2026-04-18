@@ -335,6 +335,28 @@ def prepare_dataset(
     )
 
 
+def feature_source_key(features_path: str | Path) -> str:
+    # Derives a filesystem-safe slug identifying which feature pipeline a run
+    # came from (e.g. "features", "pretrained_embeddings"). Used to route
+    # clustering outputs into separate per-source subtrees so pretrained-
+    # embedding results don't overwrite hand-crafted audio-feature results.
+    path = Path(features_path).resolve()
+    if path.is_file():
+        raw = path.parent.name
+    else:
+        raw = path.name
+    cleaned = re.sub(r"[^A-Za-z0-9_-]+", "_", raw.strip()).strip("_")
+    return cleaned or "features"
+
+
+def default_algorithm_output_dir(features_path: str | Path, algorithm: str) -> Path:
+    return DEFAULT_CLUSTER_OUTPUT_DIR / feature_source_key(features_path) / algorithm
+
+
+def default_cluster_results_dir(features_path: str | Path) -> Path:
+    return DEFAULT_CLUSTER_OUTPUT_DIR / feature_source_key(features_path)
+
+
 def ensure_output_dir(output_dir: str | Path) -> Path:
     path = Path(output_dir).resolve()
     path.mkdir(parents=True, exist_ok=True)

@@ -22,6 +22,7 @@ DEFAULT_PRETRAINED_SHARD_DIRS = (
 )
 DEFAULT_PRETRAINED_LOGS_DIR = WORKSPACE_DIR / "pretrained_embeddings_logs"
 DEFAULT_MATCHES_CSV = DEFAULT_DATA_DIR / "msd_deezer_matches.csv"
+DEFAULT_CATALOG_CSV = DEFAULT_DATA_DIR / "msd_deezer_catalog.csv"
 DEFAULT_PENDING_PATTERNS = ("*.pending.csv", "*.pending.json", "*.pending")
 
 
@@ -78,11 +79,12 @@ def unique_existing_paths(paths: list[Path]) -> tuple[Path, ...]:
 
 
 def discover_data_outputs() -> tuple[Path, ...]:
-    # Intentionally excludes DEFAULT_MATCHES_CSV: that file holds the phase-1
-    # MSD metadata extraction plus incremental Deezer-enrichment progress.
-    # Rebuilding it requires the MillionSongSubset HDF5 dataset, which lives
-    # only on the laptop (gitignored), so auto-deleting it would strand the
-    # DGX. If a true wipe is needed, remove the CSV manually with `rm`.
+    # Excludes DEFAULT_CATALOG_CSV: that is the pristine MSD-only catalog
+    # built once from the MillionSongSubset HDF5 (which lives on the laptop
+    # only). Deleting it would strand a DGX reset. The working CSV
+    # (msd_deezer_matches.csv) is handled by the dedicated "download_state"
+    # cleanup group -- deleting it causes the next pipeline run to reseed
+    # from the catalog, giving a true fresh download start.
     candidates: list[Path] = []
     if DEFAULT_DATA_DIR.exists():
         for pattern in DEFAULT_PENDING_PATTERNS:
@@ -123,9 +125,18 @@ def build_cleanup_groups() -> list[CleanupGroup]:
             paths=(DEFAULT_CACHE_DIR,),
         ),
         CleanupGroup(
+            key="download_state",
+            title="Deezer download progress",
+            description=(
+                "Working CSV (data/msd_deezer_matches.csv) tracking match + download state. "
+                "Deleting triggers a fresh download run reseeded from msd_deezer_catalog.csv."
+            ),
+            paths=(DEFAULT_MATCHES_CSV,),
+        ),
+        CleanupGroup(
             key="data",
             title="Pending data snapshots",
-            description="Temporary *.pending.* snapshots in data/ (msd_deezer_matches.csv is preserved).",
+            description="Temporary *.pending.* snapshots in data/ (catalog CSV is always preserved).",
             paths=discover_data_outputs(),
         ),
         CleanupGroup(
@@ -312,6 +323,7 @@ def parse_args() -> argparse.Namespace:
             "features",
             "cluster_results",
             "cache",
+            "download_state",
             "data",
             "logs",
             "pretrained_embeddings",
