@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import shutil
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -173,6 +174,36 @@ def build_cleanup_groups() -> list[CleanupGroup]:
     return [group for group in groups if group.existing_paths]
 
 
+def _rmtree_nfs_safe(path: Path, max_retries: int = 5, delay_sec: float = 1.0) -> None:
+    # On NFS-backed storage (e.g. the DGX /storage/ mounts) unlinking a file
+    # that another process still has open leaves a hidden .nfs* sidecar behind,
+    # so the final rmdir in shutil.rmtree fails with ENOTEMPTY. Retry a few
+    # times, sweeping any .nfs* leftovers between attempts.
+    last_error: OSError | None = None
+    for _ in range(max_retries):
+        try:
+            shutil.rmtree(path)
+            return
+        except OSError as exc:
+            if not path.exists():
+                return
+            last_error = exc
+            for leftover in path.rglob(".nfs*"):
+                try:
+                    leftover.unlink()
+                except OSError:
+                    pass
+            time.sleep(delay_sec)
+
+    if path.exists():
+        remaining = sorted(path.rglob("*"))
+        print(
+            f"Warning: could not fully remove {path} ({last_error}). "
+            f"{len(remaining)} entr(ies) remain; likely NFS-held .nfs* sidecars "
+            "that will clear once the holding process exits."
+        )
+
+
 def delete_path(path: Path, dry_run: bool) -> bool:
     if not path.exists():
         return False
@@ -182,7 +213,7 @@ def delete_path(path: Path, dry_run: bool) -> bool:
         return True
 
     if path.is_dir():
-        shutil.rmtree(path)
+        _rmtree_nfs_safe(path)
     else:
         path.unlink()
 
