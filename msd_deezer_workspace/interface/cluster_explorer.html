@@ -1408,6 +1408,8 @@
       songsById: new Map(),
       selectedSongId: null,
       activeAlgorithm: null,
+      activeSourceId: null,
+      availableSources: [],
       recommendations: [],
       filteredSongIds: [],
       canvases: new Map(),
@@ -1529,6 +1531,11 @@
         <div class="top-bar-stats" id="hero-stats"></div>
       `;
       header.querySelector(".top-bar-algo").innerHTML = `
+        <section class="hero-module">
+          <div class="section-label">Feature Source</div>
+          <div id="source-buttons" class="algo-buttons"></div>
+          <div id="source-note" class="algo-note"></div>
+        </section>
         <section class="hero-module">
           <div class="section-label">Active Clustering</div>
           <div id="algorithm-buttons" class="algo-buttons"></div>
@@ -1653,14 +1660,74 @@
       await loadRecommendations();
     }
 
-    async function fetchState() {
-      const response = await fetch("/api/state");
+    async function fetchState(sourceId = null) {
+      const params = new URLSearchParams();
+      if (sourceId) params.set("source", sourceId);
+      const url = params.toString() ? `/api/state?${params.toString()}` : "/api/state";
+      const response = await fetch(url);
       if (!response.ok) throw new Error("Could not load explorer state.");
       state.payload = await response.json();
       state.songsById = new Map(state.payload.songs.map(song => [song.id, song]));
       state.activeAlgorithm = state.payload.summary.defaultAlgorithm;
+      state.availableSources = state.payload.summary.availableSources || [];
+      state.activeSourceId = state.payload.summary.activeSource || sourceId || state.payload.summary.defaultSource || null;
       state.selectedSongId = state.payload.listOrderSongIds[0] || state.payload.songs[0]?.id || null;
       state.filteredSongIds = [...state.payload.listOrderSongIds];
+    }
+
+    function renderSourceButtons() {
+      const buttonsRoot = document.getElementById("source-buttons");
+      if (!buttonsRoot) return;
+      buttonsRoot.innerHTML = "";
+      const sources = state.availableSources || [];
+      if (sources.length <= 1) {
+        const note = document.getElementById("source-note");
+        if (note) {
+          note.textContent = sources[0]
+            ? `Using ${sources[0].label} (only source available)`
+            : "";
+        }
+        if (sources.length === 1) {
+          const pill = document.createElement("span");
+          pill.className = "algorithm-button active";
+          pill.textContent = sources[0].label;
+          buttonsRoot.appendChild(pill);
+        }
+        return;
+      }
+      for (const source of sources) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = `algorithm-button${source.id === state.activeSourceId ? " active" : ""}`;
+        button.textContent = source.label;
+        button.addEventListener("click", async () => {
+          if (source.id === state.activeSourceId) return;
+          await reloadForSource(source.id);
+        });
+        buttonsRoot.appendChild(button);
+      }
+      const note = document.getElementById("source-note");
+      if (note) {
+        const active = sources.find(s => s.id === state.activeSourceId);
+        note.textContent = active
+          ? `Clusters and recommendations derived from ${active.label}.`
+          : "";
+      }
+    }
+
+    async function reloadForSource(sourceId) {
+      await fetchState(sourceId);
+      renderSourceButtons();
+      renderHeroStats();
+      renderAlgorithmButtons();
+      renderAlgorithmNote();
+      renderSongList();
+      buildPlotGrid();
+      renderAlgorithmDetails();
+      syncSongList();
+      renderSelectedSong();
+      await loadRecommendations();
+      drawPlots();
     }
 
     function renderHeroStats() {
@@ -1669,11 +1736,20 @@
       const details = activeAlgorithmDetails();
       const activeLabel = algorithmLabels[state.activeAlgorithm] || state.activeAlgorithm;
       const selected = currentSong();
+      const sources = state.availableSources || [];
+      const activeSource = sources.find(s => s.id === state.activeSourceId) || sources[0];
       const statMarkup = [
         {
           label: "Catalog",
           value: formatWholeNumber(songs),
           meta: `${formatWholeNumber(audioReady)} songs have audio previews`,
+        },
+        {
+          label: "Feature source",
+          value: activeSource ? activeSource.label : "—",
+          meta: sources.length > 1
+            ? `${sources.length} sources loaded — switch above`
+            : "Single source loaded",
         },
         {
           label: `${activeLabel} clusters`,
@@ -1994,6 +2070,7 @@
         song_id: state.selectedSongId,
         algorithm: state.activeAlgorithm,
       });
+      if (state.activeSourceId) params.set("source", state.activeSourceId);
       const response = await fetch(`/api/recommendations?${params.toString()}`);
       if (!response.ok) {
         state.recommendations = [];
@@ -2270,6 +2347,7 @@
       try {
         await fetchState();
         enhanceLayoutSkeleton();
+        renderSourceButtons();
         renderHeroStats();
         renderAlgorithmButtons();
         renderAlgorithmNote();

@@ -132,17 +132,61 @@ This command stops matching `extract_pretrained_embeddings.py` processes for you
 
 ---
 
-## 9) Launch the cluster explorer with pretrained embeddings
+## 9) Run the pretrained embedding models
 
-If you want to open the cluster explorer using the pretrained embeddings output and without Deezer previews, use:
+If you want to verify the pretrained models and then run the parallel extraction job on the DGX, use:
 
 ```bash
 cd /storage/data4/up1072603/projects/ML-song-recommendation-system/msd_deezer_workspace
+export CUDA_VISIBLE_DEVICES=0
+export XLA_FLAGS=--xla_gpu_cuda_data_dir=/opt/nvidia/hpc_sdk/Linux_x86_64/24.11/cuda
+
+python extract_pretrained_embeddings.py --check-models --device cuda
+bash run_parallel_extraction.sh 16
+```
+
+### When to use this block
+
+Use this block after audio preprocessing when you want to generate pretrained embeddings with MusicNN, MERT, and EnCodecMAE on the DGX.
+
+### Important
+
+Replace `0` in `CUDA_VISIBLE_DEVICES=0` with a free GPU index on the DGX before starting the run.
+
+---
+
+## 10) Run clustering on the extracted audio features
+
+If you want to cluster the contents of `features/` and then inspect the result in the explorer, use:
+
+```bash
+cd /storage/data4/up1072603/projects/ML-song-recommendation-system/msd_deezer_workspace
+python run_kmeans_clustering.py --features-path features/
+python run_gmm_clustering.py --features-path features/
+python run_hdbscan_clustering.py --features-path features/
+python launch_cluster_explorer.py --features-path features/ --no-deezer-previews
+```
+
+### When to use this block
+
+Use this block when you want to cluster the handcrafted audio features stored in `features/` and browse the results locally in the cluster explorer.
+
+---
+
+## 11) Run clustering on the pretrained embeddings
+
+If you want to cluster the contents of `pretrained_embeddings/` and then inspect the result in the explorer, use:
+
+```bash
+cd /storage/data4/up1072603/projects/ML-song-recommendation-system/msd_deezer_workspace
+python run_kmeans_clustering.py --features-path pretrained_embeddings/
+python run_gmm_clustering.py --features-path pretrained_embeddings/
+python run_hdbscan_clustering.py --features-path pretrained_embeddings/
 python launch_cluster_explorer.py --features-path pretrained_embeddings/ --no-deezer-previews
 ```
 
 ### When to use this block
 
-Use this block when you want to inspect clusters based on the contents of `pretrained_embeddings/` and avoid loading Deezer preview audio in the explorer.
+Use this block when you want to cluster the pretrained embedding outputs and inspect those clusters without loading Deezer preview audio in the explorer.
 
 ---
