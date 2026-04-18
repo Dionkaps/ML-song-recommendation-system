@@ -1,0 +1,8 @@
+{
+  "total": 8140,
+  "processed": 8140,
+  "errors": 0,
+  "output_dir": "/storage/data4/up1072603/projects/ML-song-recommendation-system/msd_deezer_workspace/features",
+  "raw_dir": "/storage/data4/up1072603/projects/ML-song-recommendation-system/msd_deezer_workspace/features/raw",
+  "summary_csv": "/storage/data4/up1072603/projects/ML-song-recommendation-system/msd_deezer_workspace/features/feature_vectors.csv"
+}

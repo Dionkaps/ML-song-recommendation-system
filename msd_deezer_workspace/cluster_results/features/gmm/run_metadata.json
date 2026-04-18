@@ -1,0 +1,22 @@
+{
+  "algorithm": "bayesian_gmm",
+  "effective_cluster_count": 10,
+  "active_components": 10,
+  "max_components": 10,
+  "covariance_type": "full",
+  "weight_concentration_prior": 100.0,
+  "samples": 8138,
+  "feature_source": "/storage/data4/up1072603/projects/ML-song-recommendation-system/msd_deezer_workspace/features",
+  "summary_csv_path": "/storage/data4/up1072603/projects/ML-song-recommendation-system/msd_deezer_workspace/features/feature_vectors.csv",
+  "pca_components": 100,
+  "pca_explained_variance_ratio": 0.9667714834114542,
+  "umap_components": 15,
+  "umap_n_neighbors": 40,
+  "umap_min_dist": 0.01,
+  "clustering_dimensions": 15,
+  "lower_bound": 310855.06693709694,
+  "silhouette_score": 0.237319678068161,
+  "soft_silhouette_score": 0.2580357339353682,
+  "reg_covar": 0.0003251746594905853,
+  "selection_method": "soft_silhouette_with_hierarchical_refinement"
+}
