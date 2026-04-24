@@ -147,12 +147,34 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
-        "--prefetch", type=int, default=2,
+        "--prefetch", type=int, default=16,
         help=(
             "Number of songs to pre-decode in the background for GPU "
             "extractors (MERT, EnCodecMAE). Keeps the GPU fed while the "
             "next song's audio is being read from disk. 0 disables. "
-            "Default: 2."
+            "Default: 16."
+        ),
+    )
+    parser.add_argument(
+        "--batch-size", type=int, default=16,
+        help=(
+            "Starting mini-batch size for GPU-friendly extractors. Songs "
+            "are accumulated into batches of this size and pushed through "
+            "each GPU model in a single forward pass. The effective batch "
+            "grows up to --max-batch-size when free VRAM allows (this is "
+            "what picks up the slack when a sibling GPU worker finishes) "
+            "and halves on CUDA OOM. Set to 1 for legacy per-song "
+            "dispatch. Default: 16."
+        ),
+    )
+    parser.add_argument(
+        "--max-batch-size", type=int, default=None,
+        help=(
+            "Ceiling for the dynamic batch sizer. When free VRAM is "
+            "comfortably above the current batch's footprint (e.g. after "
+            "a co-resident worker finishes), the batch is doubled up to "
+            "this value. Defaults to 4 x --batch-size (so start=16 -> "
+            "cap=64). Set equal to --batch-size to disable growth."
         ),
     )
     parser.add_argument(
@@ -248,6 +270,8 @@ def main() -> int:
         num_shards=args.num_shards,
         generate_csvs=(args.num_shards == 1),
         prefetch=args.prefetch,
+        batch_size=args.batch_size,
+        max_batch_size=args.max_batch_size,
     )
     return 0
 

@@ -1199,7 +1199,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--limit", type=int, help="Maximum number of non-skipped songs to attempt during the Deezer stage.")
     parser.add_argument("--save-every", type=int, default=25, help="Persist the CSV and cache after this many attempts.")
     parser.add_argument("--request-delay", type=float, default=0.0, help="Delay between Deezer attempts in seconds (single-worker mode, 0 when using rate limiter).")
-    parser.add_argument("--workers", type=int, default=3, help="Number of concurrent download threads (default: 3).")
+    parser.add_argument("--workers", type=int, default=16, help="Number of concurrent download threads (default: 16). The --max-songs-per-sec rate limiter still bounds total throughput.")
     parser.add_argument("--max-songs-per-sec", type=float, default=3.0, help="Rate-limit cap on songs processed per second across all workers (0 = unlimited).")
     parser.add_argument(
         "--retry-no-match",

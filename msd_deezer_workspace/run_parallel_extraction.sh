@@ -65,6 +65,8 @@ echo "=========================================================="
 echo "  MusicNN workers  : $MUSICNN_WORKERS  (CPU, no GPU)"
 echo "  MERT             : 1 process  (GPU $CUDA_VISIBLE_DEVICES)"
 echo "  EnCodecMAE       : 1 process  (GPU $CUDA_VISIBLE_DEVICES)"
+echo "  GPU batch        : start=$GPU_BATCH_SIZE, cap=$GPU_MAX_BATCH_SIZE (dynamic on free VRAM)"
+echo "  GPU prefetch     : $GPU_PREFETCH"
 echo "  Logs             : $LOG_DIR/"
 echo "  Merged output    : $MERGED_OUT/"
 echo "=========================================================="
@@ -117,8 +119,24 @@ start_worker() {
 
 # Prefetch lookahead for GPU workers -- pre-decodes N upcoming songs on
 # background threads so the GPU isn't idled by librosa.load between songs.
-# 3 is enough to ride out occasional slow reads without using much RAM.
-GPU_PREFETCH=${GPU_PREFETCH:-3}
+# 16 keeps a full batch queued ahead of the GPU at all times.
+GPU_PREFETCH=${GPU_PREFETCH:-16}
+
+# Mini-batch size for the GPU forward pass. The orchestrator collects
+# this many songs and pushes them through each GPU model in a single
+# call (with bf16/fp16 autocast + TF32). Auto-halves on CUDA OOM, so
+# 16 is a safe default on most DGX-class GPUs (A100, H100, V100 32GB).
+GPU_BATCH_SIZE=${GPU_BATCH_SIZE:-16}
+
+# Ceiling for the dynamic batch sizer. Both GPU workers co-reside on the
+# single assigned GPU, so each one starts conservatively at 16. As soon
+# as one finishes, the other sees the freed VRAM (via
+# torch.cuda.mem_get_info) and doubles its effective batch, up to this
+# cap. 128 is safe in solo mode on the DGX's A100-SXM4-40GB: MERT at
+# batch=128 peaks around 32 GB, EnCodecMAE at batch=96 peaks around
+# 36 GB -- both fit with headroom, and the OOM halving backstops any
+# miscalculation. On smaller GPUs (V100 32GB), override to 64.
+GPU_MAX_BATCH_SIZE=${GPU_MAX_BATCH_SIZE:-128}
 
 # MusicNN workers -- force CPU-only (CUDA_VISIBLE_DEVICES="" prevents
 # TF from allocating GPU memory even though --device cpu is set). No
@@ -137,7 +155,10 @@ for ((i=0; i<MUSICNN_WORKERS; i++)); do
 done
 
 # MERT (GPU) -- no sharding for GPU models (VRAM cost of duplicating
-# the model outweighs the speedup).
+# the model outweighs the speedup). Batched inference keeps the GPU
+# busy at high SM occupancy: N songs go through one forward pass.
+# The effective batch starts at GPU_BATCH_SIZE and grows up to
+# GPU_MAX_BATCH_SIZE when its sibling worker frees VRAM by finishing.
 start_worker \
     "mert" \
     "$LOG_DIR/mert.log" \
@@ -145,7 +166,9 @@ start_worker \
         --models mert \
         --output-dir "$MERT_OUT" \
         --device cuda \
-        --prefetch "$GPU_PREFETCH"
+        --prefetch "$GPU_PREFETCH" \
+        --batch-size "$GPU_BATCH_SIZE" \
+        --max-batch-size "$GPU_MAX_BATCH_SIZE"
 
 # EnCodecMAE (GPU)
 start_worker \
@@ -155,7 +178,9 @@ start_worker \
         --models encodecmae \
         --output-dir "$ENCODEC_OUT" \
         --device cuda \
-        --prefetch "$GPU_PREFETCH"
+        --prefetch "$GPU_PREFETCH" \
+        --batch-size "$GPU_BATCH_SIZE" \
+        --max-batch-size "$GPU_MAX_BATCH_SIZE"
 
 echo ""
 echo "Launched ${#PIDS[@]} workers. Tail a log in another shell for raw detail:"

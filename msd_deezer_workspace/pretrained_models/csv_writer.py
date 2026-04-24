@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import csv
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,9 @@ from .base import (
 
 
 logger = logging.getLogger(__name__)
+
+
+DEFAULT_CSV_WORKERS = 16
 
 
 DURATION_KEY = "__duration_sec__"
@@ -73,31 +77,49 @@ def _write_csv(path: Path, fieldnames: list[str], rows: list[dict[str, Any]]) ->
             writer.writerow(row)
 
 
+def _load_one_record(
+    npz_path: Path, audio_dir: Path,
+) -> dict[str, Any] | None:
+    """Load a single NPZ file into a record dict, or None on failure."""
+    try:
+        blob = _npz_embeddings(npz_path)
+    except Exception as exc:
+        logger.warning("Could not load %s: %s", npz_path.name, exc)
+        return None
+
+    duration_sec = float(blob.pop(DURATION_KEY, np.float32(0.0)))
+    sample_rate = int(blob.pop(SAMPLE_RATE_KEY, np.int32(22050)))
+    audio_path = _find_audio_path(audio_dir, npz_path.stem)
+
+    return {
+        "npz_path": npz_path,
+        "audio_path": audio_path,
+        "duration_sec": duration_sec,
+        "sample_rate": sample_rate,
+        "embeddings": blob,
+    }
+
+
 def _gather_records(
     raw_dir: Path,
     audio_dir: Path,
+    workers: int = DEFAULT_CSV_WORKERS,
 ) -> list[dict[str, Any]]:
-    """Load all NPZ files into a list of records ready for CSV emission."""
-    records: list[dict[str, Any]] = []
-    for npz_path in sorted(raw_dir.glob("*.npz")):
-        try:
-            blob = _npz_embeddings(npz_path)
-        except Exception as exc:
-            logger.warning("Could not load %s: %s", npz_path.name, exc)
-            continue
+    """Load all NPZ files into a list of records ready for CSV emission.
 
-        duration_sec = float(blob.pop(DURATION_KEY, np.float32(0.0)))
-        sample_rate = int(blob.pop(SAMPLE_RATE_KEY, np.int32(22050)))
-        audio_path = _find_audio_path(audio_dir, npz_path.stem)
+    NPZ loading is I/O bound (decompress + read from disk), so a thread
+    pool gives near-linear speed-up without paying for process startup.
+    """
+    npz_paths = sorted(raw_dir.glob("*.npz"))
+    if not npz_paths:
+        return []
 
-        records.append({
-            "npz_path": npz_path,
-            "audio_path": audio_path,
-            "duration_sec": duration_sec,
-            "sample_rate": sample_rate,
-            "embeddings": blob,
-        })
-    return records
+    workers = max(1, min(int(workers), len(npz_paths)))
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        loaded = list(executor.map(
+            lambda p: _load_one_record(p, audio_dir), npz_paths,
+        ))
+    return [rec for rec in loaded if rec is not None]
 
 
 def write_per_model_csv(

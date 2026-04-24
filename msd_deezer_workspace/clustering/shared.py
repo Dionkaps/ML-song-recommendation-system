@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import json
 import re
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,9 @@ from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 from tqdm import tqdm
 from umap import UMAP
+
+
+DEFAULT_SUMMARY_WORKERS = 16
 
 
 WORKSPACE_DIR = Path(__file__).resolve().parents[1]
@@ -169,14 +173,37 @@ def summarize_feature_npz(npz_path: Path) -> dict[str, Any]:
     return row
 
 
-def build_summary_csv_from_raw(raw_dir: Path, summary_csv_path: Path) -> pd.DataFrame:
+def build_summary_csv_from_raw(
+    raw_dir: Path,
+    summary_csv_path: Path,
+    workers: int = DEFAULT_SUMMARY_WORKERS,
+) -> pd.DataFrame:
     npz_files = sorted(raw_dir.glob("*.npz"))
     if not npz_files:
         raise FileNotFoundError(f"No raw feature files found in {raw_dir}")
 
-    rows = []
-    for npz_path in tqdm(npz_files, desc="Building feature summary", unit="song"):
-        rows.append(summarize_feature_npz(npz_path))
+    workers = max(1, min(int(workers), len(npz_files)))
+
+    # `summarize_feature_npz` does numpy reductions per song (CPU-bound).
+    # Use a process pool so each worker gets its own GIL.
+    rows: list[dict[str, Any]] = []
+    if workers == 1:
+        for npz_path in tqdm(npz_files, desc="Building feature summary", unit="song"):
+            rows.append(summarize_feature_npz(npz_path))
+    else:
+        with ProcessPoolExecutor(max_workers=workers) as executor:
+            futures = {
+                executor.submit(summarize_feature_npz, npz_path): npz_path
+                for npz_path in npz_files
+            }
+            for future in tqdm(
+                as_completed(futures),
+                total=len(futures),
+                desc="Building feature summary",
+                unit="song",
+            ):
+                rows.append(future.result())
+        rows.sort(key=lambda r: r.get("file", ""))
 
     fieldnames = summary_fieldnames()
     summary_csv_path.parent.mkdir(parents=True, exist_ok=True)

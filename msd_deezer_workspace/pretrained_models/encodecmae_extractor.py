@@ -11,6 +11,7 @@ Reference:
 from __future__ import annotations
 
 import logging
+from contextlib import nullcontext
 
 import librosa
 import numpy as np
@@ -36,6 +37,14 @@ class EnCodecMAEExtractor(BaseExtractor):
     versions. We try several common call patterns (HEAR
     `get_scene_embeddings`, `extract_features_from_array`, etc.). If
     extraction fails on your installed version, adjust `extract()`.
+
+    GPU saturation features (when device == "cuda"):
+      * TF32 matmul + cuDNN autotune for the encoder.
+      * `torch.inference_mode()` + bfloat16 autocast across the whole
+        batch loop (the encodecmae library's API is per-array, so we
+        amortize autocast overhead by entering it once per batch).
+      * `extract_batch_from_arrays` is the orchestrator's entry point;
+        it loops over the batch under one autocast context.
     """
 
     name = "encodecmae"
@@ -62,13 +71,48 @@ class EnCodecMAEExtractor(BaseExtractor):
             ) from exc
 
         self._torch = torch
+        self._is_cuda = self.device.startswith("cuda")
+        self._autocast_dtype = self._pick_autocast_dtype()
+
+        if self._is_cuda:
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
+            torch.backends.cudnn.benchmark = True
 
         logger.info(
             "Loading EnCodecMAE %s on %s (first run downloads weights)...",
             self.MODEL_VARIANT, self.device,
         )
         self.model = load_model(self.MODEL_VARIANT, device=self.device)
-        logger.info("EnCodecMAE extractor initialized (1024-dim, %s)", self.device)
+        # Best-effort eval mode: not all encodecmae wrappers expose .eval().
+        if hasattr(self.model, "eval"):
+            try:
+                self.model.eval()
+            except Exception:
+                pass
+        logger.info(
+            "EnCodecMAE extractor initialized (1024-dim, %s, autocast=%s)",
+            self.device,
+            getattr(self._autocast_dtype, "__repr__", lambda: "off")(),
+        )
+
+    def _pick_autocast_dtype(self):
+        torch = self._torch
+        if not self._is_cuda:
+            return None
+        try:
+            if torch.cuda.is_bf16_supported():
+                return torch.bfloat16
+        except Exception:
+            pass
+        return torch.float16
+
+    def _autocast_ctx(self):
+        if self._autocast_dtype is None or not self._is_cuda:
+            return nullcontext()
+        return self._torch.autocast(device_type="cuda", dtype=self._autocast_dtype)
+
+    # ── Per-file path ──────────────────────────────────────────────────
 
     def extract(self, audio_path: str) -> np.ndarray:
         y, _ = librosa.load(audio_path, sr=self.sample_rate, mono=True)
@@ -84,11 +128,55 @@ class EnCodecMAEExtractor(BaseExtractor):
         used if the installed encodecmae API version falls back to the
         file-path call path.
         """
-        with self._torch.no_grad():
+        # no_grad (not inference_mode) because the third-party encodecmae
+        # library is opaque and may internally toggle autograd in hooks;
+        # inference_mode would refuse the re-enable. The bf16 autocast is
+        # where the real speedup comes from anyway.
+        with self._torch.no_grad(), self._autocast_ctx():
             features = self._call_model(y, audio_path or "")
+        return self._features_to_embedding(features)
 
+    # ── Batched path (used by the orchestrator) ────────────────────────
+
+    def extract_batch_from_arrays(
+        self,
+        arrays: list[np.ndarray],
+        audio_paths: list[str] | None = None,
+    ) -> np.ndarray:
+        """Run the encoder over a batch of N waveforms.
+
+        encodecmae's high-level `extract_features_from_array` API is
+        per-array, so we loop within a single inference_mode + autocast
+        context. That alone gives a meaningful speedup on the GPU because
+        the autocast cost is amortized and bfloat16 matmul kicks in for
+        the encoder's transformer layers.
+
+        Returns an array of shape (N, 1024) dtype float32.
+        """
+        if not arrays:
+            return np.empty((0, self.embedding_dim), dtype=np.float32)
+
+        if audio_paths is None:
+            audio_paths = [""] * len(arrays)
+
+        embeddings: list[np.ndarray] = []
+        # no_grad (not inference_mode) because the third-party encodecmae
+        # library is opaque and may internally toggle autograd in hooks;
+        # inference_mode would refuse the re-enable. The bf16 autocast is
+        # where the real speedup comes from anyway.
+        with self._torch.no_grad(), self._autocast_ctx():
+            for y, path in zip(arrays, audio_paths):
+                features = self._call_model(y, path)
+                embeddings.append(self._features_to_embedding(features))
+        return np.stack(embeddings).astype(np.float32)
+
+    # ── Internal helpers ───────────────────────────────────────────────
+
+    def _features_to_embedding(self, features) -> np.ndarray:
         if isinstance(features, self._torch.Tensor):
-            features = features.detach().cpu().numpy()
+            # bf16/fp16 autocast outputs cast back to float32 for the
+            # numpy round-trip + downstream l2_normalize.
+            features = features.float().detach().cpu().numpy()
 
         features = np.asarray(features, dtype=np.float32)
 

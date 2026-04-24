@@ -30,9 +30,11 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import numpy as np
+from tqdm import tqdm
 
 from pretrained_models import (
     AVAILABLE_MODELS,
@@ -151,6 +153,14 @@ def parse_args() -> argparse.Namespace:
             "from a previous merge run."
         ),
     )
+    parser.add_argument(
+        "--workers", type=int, default=16,
+        help=(
+            "Number of parallel threads for the per-stem NPZ merge "
+            "(I/O bound: load N source NPZs, write 1 merged NPZ). "
+            "Default: 16."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -196,17 +206,27 @@ def main() -> int:
             )
             return 3
 
+        workers = max(1, int(args.workers))
         logger.info(
-            "Merging %d song(s) from %d source(s) into %s",
-            len(stems), len(source_raws), target_raw,
+            "Merging %d song(s) from %d source(s) into %s using %d worker(s)",
+            len(stems), len(source_raws), target_raw, workers,
         )
 
+        target_raw.mkdir(parents=True, exist_ok=True)
+
         written = 0
-        for stem in stems:
-            ok, models = _merge_stem(stem, source_raws, target_raw)
-            if ok:
-                written += 1
-                all_models_present.update(models)
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = {
+                executor.submit(_merge_stem, stem, source_raws, target_raw): stem
+                for stem in stems
+            }
+            for future in tqdm(
+                as_completed(futures), total=len(futures), desc="Merging shards",
+            ):
+                ok, models = future.result()
+                if ok:
+                    written += 1
+                    all_models_present.update(models)
 
         logger.info(
             "Merged %d NPZ(s). Models found across merged set: %s",

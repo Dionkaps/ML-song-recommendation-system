@@ -46,7 +46,44 @@ Use this block when you want to download Deezer preview audio for the MSD/Deezer
 
 ---
 
-## 4) Build the metadata CSV only
+## 4) Run the resilient Deezer download inside a named tmux session
+
+If you want the long-running Deezer download job to keep running after you disconnect from the DGX, start it inside `tmux`:
+
+```bash
+# Start a named session
+tmux new -s msd
+
+# Inside tmux, run your stuff normally:
+source /opt/anaconda3/bin/activate
+conda activate /storage/data4/up1072603/conda_envs/msdrec
+cd /storage/data4/up1072603/projects/ML-song-recommendation-system/msd_deezer_workspace
+python run_resilient_msd_deezer.py --workers 6 --max-songs-per-sec 4.0 \
+  --save-every 100 --chunk-size 5000 --idle-timeout-sec 900
+
+# Detach and leave it running:
+# Ctrl-b then d
+```
+
+To manage the session later:
+
+```bash
+tmux ls
+tmux attach -t msd
+tmux kill-session -t msd
+```
+
+### When to use this block
+
+Use this block when you want the resilient Deezer download to continue running safely in the background even if your SSH session disconnects.
+
+### Important
+
+Reattach with `tmux attach -t msd` whenever you want to inspect progress, and use `tmux kill-session -t msd` only when you want to stop and remove that named session.
+
+---
+
+## 5) Build the metadata CSV only
 
 If you want to run only the extraction stage and stop before any Deezer matching or downloads, use:
 
@@ -61,7 +98,7 @@ Use this block when you want to build or refresh the metadata CSV only, without 
 
 ---
 
-## 5) Reset the MSD/Deezer workspace outputs
+## 6) Reset the MSD/Deezer workspace outputs
 
 If you want to delete generated workspace artifacts and start fresh, use:
 
@@ -80,7 +117,7 @@ This is a destructive cleanup command for generated workspace outputs, and `--al
 
 ---
 
-## 6) Preprocess the downloaded audio
+## 7) Preprocess the downloaded audio
 
 If you want to preprocess the audio files that were downloaded by the Deezer pipeline, use:
 
@@ -95,7 +132,7 @@ Use this block after the download step when you want to preprocess the downloade
 
 ---
 
-## 7) Extract audio features
+## 8) Extract audio features
 
 If you want to extract audio features from the processed audio files, use:
 
@@ -114,7 +151,7 @@ Use this block after preprocessing when you want to generate feature outputs in 
 
 ---
 
-## 8) Stop running pretrained embedding extraction jobs
+## 9) Stop running pretrained embedding extraction jobs
 
 If you need to stop any running `extract_pretrained_embeddings.py` processes for your user, use:
 
@@ -132,7 +169,7 @@ This command stops matching `extract_pretrained_embeddings.py` processes for you
 
 ---
 
-## 9) Run the pretrained embedding models
+## 10) Run the pretrained embedding models
 
 If you want to verify the pretrained models and then run the parallel extraction job on the DGX, use:
 
@@ -155,7 +192,7 @@ Replace `0` in `CUDA_VISIBLE_DEVICES=0` with a free GPU index on the DGX before 
 
 ---
 
-## 10) Run clustering on the extracted audio features
+## 11) Run clustering on the extracted audio features
 
 If you want to cluster the contents of `features/` and then inspect the result in the explorer, use:
 
@@ -173,7 +210,7 @@ Use this block when you want to cluster the handcrafted audio features stored in
 
 ---
 
-## 11) Run clustering on the pretrained embeddings
+## 12) Run clustering on the pretrained embeddings
 
 If you want to cluster the contents of `pretrained_embeddings/` and then inspect the result in the explorer, use:
 

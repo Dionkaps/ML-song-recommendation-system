@@ -42,7 +42,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--umap-n-neighbors", type=int, default=40, help="UMAP n_neighbors parameter.")
     parser.add_argument("--umap-min-dist", type=float, default=0.01, help="UMAP min_dist parameter.")
     parser.add_argument("--disable-umap", action="store_true", help="Skip UMAP and cluster on PCA output directly.")
-    parser.add_argument("--workers", type=int, default=8, help="Number of parallel workers for the BGMM grid search (default: 8).")
+    parser.add_argument("--workers", type=int, default=16, help="Number of parallel workers for the BGMM grid search (default: 16).")
     return parser.parse_args()
 
 
@@ -158,7 +158,7 @@ def select_best_bgmm(
     dataset: PreparedDataset,
     max_components: int,
     random_state: int,
-    workers: int = 8,
+    workers: int = 16,
 ) -> tuple[BayesianGaussianMixture, np.ndarray, np.ndarray, pd.DataFrame]:
     x = dataset.reduced_matrix
     silhouette_sample_size = min(len(x), 2000)

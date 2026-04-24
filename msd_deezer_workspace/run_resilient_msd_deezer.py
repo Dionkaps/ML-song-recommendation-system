@@ -47,7 +47,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-sessions", type=int, default=0, help="Optional hard cap on how many subprocess sessions to run. Use 1 for a tiny smoke test.")
     parser.add_argument("--save-every", type=int, default=25, help="Persist the CSV and cache after this many attempts inside the pipeline.")
     parser.add_argument("--request-delay", type=float, default=0.0, help="Delay between Deezer attempts inside the pipeline (single-worker mode, 0 when using rate limiter).")
-    parser.add_argument("--workers", type=int, default=3, help="Number of concurrent download threads inside the pipeline.")
+    parser.add_argument("--workers", type=int, default=16, help="Number of concurrent download threads inside the pipeline (default: 16). The --max-songs-per-sec rate limiter still bounds total throughput.")
     parser.add_argument("--max-songs-per-sec", type=float, default=3.0, help="Rate-limit cap on songs/sec (0 = unlimited).")
     parser.add_argument("--retry-no-match", action="store_true", help="Pass through retry-no-match to the pipeline.")
     parser.add_argument("--redownload-existing", action="store_true", help="Pass through redownload-existing to the pipeline.")

@@ -30,6 +30,8 @@ Thumbs.db
 # the working CSV is regenerated from it on every fresh run.
 /msd_deezer_workspace/data/msd_deezer_matches.csv
 /calendar/
+/PROJECT_REPORT_FOR_PROFESSOR.md
+/PROJECT_THEORY_FOR_PROFESSOR_GR.md
 
 # Per-song NPZ dump (tens of GB) -- the fused + per-model CSVs beside it stay tracked
 /msd_deezer_workspace/pretrained_embeddings/raw/
