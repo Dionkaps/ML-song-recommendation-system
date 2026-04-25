@@ -11,6 +11,8 @@ from pathlib import Path
 WORKSPACE_DIR = Path(__file__).resolve().parent
 DEFAULT_DATA_DIR = WORKSPACE_DIR / "data"
 DEFAULT_AUDIO_DIR = WORKSPACE_DIR / "audio"
+DEFAULT_AUDIO_HANDCRAFTED_DIR = WORKSPACE_DIR / "audio_handcrafted"
+DEFAULT_AUDIO_PRETRAINED_DIR = WORKSPACE_DIR / "audio_pretrained"
 DEFAULT_FEATURES_DIR = WORKSPACE_DIR / "features"
 DEFAULT_CLUSTER_RESULTS_DIR = WORKSPACE_DIR / "cluster_results"
 DEFAULT_CACHE_DIR = WORKSPACE_DIR / "cache"
@@ -103,9 +105,27 @@ def build_cleanup_groups() -> list[CleanupGroup]:
     groups = [
         CleanupGroup(
             key="audio",
-            title="Audio previews",
-            description="Downloaded audio preview files in audio/.",
+            title="Audio previews (source)",
+            description="Downloaded Deezer preview mp3 files in audio/ (the pristine source for preprocessing).",
             paths=(DEFAULT_AUDIO_DIR,),
+        ),
+        CleanupGroup(
+            key="audio_handcrafted",
+            title="Preprocessed audio (handcrafted branch)",
+            description=(
+                "22 kHz, -23 LUFS, center-cropped wav copies in audio_handcrafted/. "
+                "Produced by DualAudioPreprocessor; consumed by extract_audio_features.py."
+            ),
+            paths=(DEFAULT_AUDIO_HANDCRAFTED_DIR,),
+        ),
+        CleanupGroup(
+            key="audio_pretrained",
+            title="Preprocessed audio (pretrained branch)",
+            description=(
+                "24 kHz, peak-capped wav copies in audio_pretrained/ (no LUFS). "
+                "Produced by DualAudioPreprocessor; consumed by extract_pretrained_embeddings.py."
+            ),
+            paths=(DEFAULT_AUDIO_PRETRAINED_DIR,),
         ),
         CleanupGroup(
             key="features",
@@ -351,6 +371,8 @@ def parse_args() -> argparse.Namespace:
         nargs="+",
         choices=(
             "audio",
+            "audio_handcrafted",
+            "audio_pretrained",
             "features",
             "cluster_results",
             "cache",

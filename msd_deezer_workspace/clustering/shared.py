@@ -104,12 +104,23 @@ def extract_ids_from_filename(filename: str) -> dict[str, str]:
 
 
 def find_audio_path_for_feature(npz_path: Path) -> str:
-    audio_dir = WORKSPACE_DIR / "audio"
+    # Search the handcrafted preprocessed copy first (matches the sample
+    # rate of the features in the NPZ), then the pretrained copy, then
+    # fall back to the pristine mp3 download. The multi-directory layout
+    # is produced by audio_preprocessing.DualAudioPreprocessor.
+    search_dirs = (
+        WORKSPACE_DIR / "audio_handcrafted",
+        WORKSPACE_DIR / "audio_pretrained",
+        WORKSPACE_DIR / "audio",
+    )
     stem = npz_path.stem
-    for extension in AUDIO_EXTENSIONS:
-        candidate = audio_dir / f"{stem}{extension}"
-        if candidate.exists():
-            return str(candidate.resolve())
+    for audio_dir in search_dirs:
+        if not audio_dir.is_dir():
+            continue
+        for extension in AUDIO_EXTENSIONS:
+            candidate = audio_dir / f"{stem}{extension}"
+            if candidate.exists():
+                return str(candidate.resolve())
     return ""
 
 

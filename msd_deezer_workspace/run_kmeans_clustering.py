@@ -185,14 +185,14 @@ def select_best_kmeans(
     # Criterion 5: best (lowest) BIC
     bic_k = int(min(records, key=lambda r: r["bic"])["cluster_count"])
 
-    # Weighted vote
-    votes: dict[int, float] = {k: 0.0 for k in ks}
+    # Unweighted vote – each criterion contributes equally
+    votes: dict[int, int] = {k: 0 for k in ks}
     if knee_k is not None and knee_k in models:
-        votes[int(knee_k)] += 2.0
-    votes[sil_k] += 2.0
-    votes[ch_k] += 1.0
-    votes[db_k] += 1.0
-    votes[bic_k] += 1.5
+        votes[int(knee_k)] += 1
+    votes[sil_k] += 1
+    votes[ch_k] += 1
+    votes[db_k] += 1
+    votes[bic_k] += 1
 
     selected_k = max(
         votes.keys(),

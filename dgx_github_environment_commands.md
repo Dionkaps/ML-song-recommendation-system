@@ -117,9 +117,22 @@ This is a destructive cleanup command for generated workspace outputs, and `--al
 
 ---
 
-## 7) Preprocess the downloaded audio
+## 7) Preprocess the downloaded audio (dual-branch)
 
-If you want to preprocess the audio files that were downloaded by the Deezer pipeline, use:
+Preprocessing now produces two preprocessed copies of each downloaded mp3
+instead of overwriting the source:
+
+* `audio_handcrafted/` — 22050 Hz mono WAV, center-cropped to 29 s,
+  normalized to -23 LUFS (EBU R128), sample-peak ceiling -1 dBFS. Feeds
+  the MFCC / chroma / spectral / Tzanetakis feature extractor.
+* `audio_pretrained/` — 24000 Hz mono WAV, center-cropped to 29 s,
+  peak-capped only (no LUFS, so the SSL pretraining distribution is
+  preserved). Feeds MERT, EnCodecMAE, and MusiCNN.
+
+The original mp3 files in `audio/` are kept untouched. Rejections
+(too short, silent, decode error) are synchronised between the two
+output directories: if a song is dropped for one branch it is dropped
+for the other.
 
 ```bash
 cd /storage/data4/up1072603/projects/ML-song-recommendation-system/msd_deezer_workspace
@@ -128,18 +141,20 @@ python preprocess_downloaded_audio.py
 
 ### When to use this block
 
-Use this block after the download step when you want to preprocess the downloaded audio files for the next stage of the pipeline.
+Use this block after the download step, before either feature-extraction
+stage. Resume is built in — re-running skips pairs that are already
+present in both output directories.
 
 ---
 
-## 8) Extract audio features
+## 8) Extract audio features (handcrafted branch)
 
-If you want to extract audio features from the processed audio files, use:
+Handcrafted feature extraction reads from `audio_handcrafted/` by default:
 
 ```bash
 cd /storage/data4/up1072603/projects/ML-song-recommendation-system/msd_deezer_workspace
 python extract_audio_features.py \
-    --input-dir audio \
+    --input-dir audio_handcrafted \
     --output-dir features \
     --sample-rate 22050 \
     --n-mfcc 20
@@ -147,7 +162,9 @@ python extract_audio_features.py \
 
 ### When to use this block
 
-Use this block after preprocessing when you want to generate feature outputs in `features/` from the audio files in `audio/`.
+Use this block after preprocessing when you want to generate feature
+outputs in `features/` from the 22 kHz LUFS-normalised copies in
+`audio_handcrafted/`.
 
 ---
 
@@ -171,7 +188,9 @@ This command stops matching `extract_pretrained_embeddings.py` processes for you
 
 ## 10) Run the pretrained embedding models
 
-If you want to verify the pretrained models and then run the parallel extraction job on the DGX, use:
+Pretrained extraction reads from `audio_pretrained/` by default (the
+24 kHz non-LUFS-normalised branch of the dual preprocessor). Verify the
+models first, then launch the parallel extraction job:
 
 ```bash
 cd /storage/data4/up1072603/projects/ML-song-recommendation-system/msd_deezer_workspace
@@ -184,11 +203,16 @@ bash run_parallel_extraction.sh 16
 
 ### When to use this block
 
-Use this block after audio preprocessing when you want to generate pretrained embeddings with MusicNN, MERT, and EnCodecMAE on the DGX.
+Use this block after `preprocess_downloaded_audio.py` has produced
+`audio_pretrained/`, when you want to generate pretrained embeddings
+with MusicNN, MERT, and EnCodecMAE on the DGX.
 
 ### Important
 
-Replace `0` in `CUDA_VISIBLE_DEVICES=0` with a free GPU index on the DGX before starting the run.
+Replace `0` in `CUDA_VISIBLE_DEVICES=0` with a free GPU index on the DGX
+before starting the run. Override the default input directory (e.g. for
+a probe subset) by exporting `PRETRAINED_AUDIO_DIR` before the `bash`
+invocation.
 
 ---
 

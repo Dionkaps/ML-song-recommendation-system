@@ -3,6 +3,19 @@ Loudness Normalizer for Audio Preprocessing.
 
 Implements ITU-R BS.1770 integrated loudness measurement and normalization
 with a sample-peak safety ceiling.
+
+The default target is -23 LUFS (EBU R128), the broadcast reference that is
+conservative enough to leave consistent headroom across heterogeneous
+sources without triggering aggressive peak limiting. Streaming targets
+such as Spotify's -14 LUFS are avoided here because they frequently push
+loud masters past the sample-peak ceiling and would introduce distortion
+(via the limiter path) on a material fraction of the catalogue.
+
+This module is used only for the handcrafted-feature preprocessing copy;
+pretrained self-supervised models (MERT, EnCodecMAE, MusiCNN) expect the
+"in-the-wild" distribution they were trained on and handle their own
+per-utterance normalization internally, so LUFS normalization should be
+skipped on their input path.
 """
 
 from __future__ import annotations
@@ -18,16 +31,9 @@ logger = logging.getLogger(__name__)
 
 
 class LoudnessNormalizer:
-    """
-    Normalizes audio loudness using ITU-R BS.1770 measurement.
+    """Normalize audio loudness to a target LUFS with a peak-safety cap."""
 
-    This class implements a two-stage loudness normalization:
-    1. Measure integrated loudness using ITU-R BS.1770
-    2. Apply gain to reach target LUFS
-    3. Apply a sample-peak safety cap if peak exceeds threshold
-    """
-
-    def __init__(self, target_lufs: float = -14.0, max_true_peak: float = -1.0):
+    def __init__(self, target_lufs: float = -23.0, max_true_peak: float = -1.0):
         if target_lufs > 0:
             raise ValueError("target_lufs should be negative (typically -14 to -23)")
         if max_true_peak > 0:

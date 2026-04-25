@@ -32,6 +32,11 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
+# The pretrained branch of DualAudioPreprocessor writes here. Override by
+# exporting PRETRAINED_AUDIO_DIR before launching (e.g. for a probe run
+# against a subset dir).
+PRETRAINED_AUDIO_DIR=${PRETRAINED_AUDIO_DIR:-audio_pretrained}
+
 # --- Preflight --------------------------------------------------------------
 
 if [[ -z "${CONDA_DEFAULT_ENV:-}" ]]; then
@@ -59,9 +64,41 @@ MERGED_OUT="pretrained_embeddings"
 
 mkdir -p "$MUSICNN_OUT" "$MERT_OUT" "$ENCODEC_OUT"
 
+if [[ ! -d "$PRETRAINED_AUDIO_DIR" ]]; then
+    echo "ERROR: Pretrained audio directory not found: $PRETRAINED_AUDIO_DIR" >&2
+    echo "  Run  python preprocess_downloaded_audio.py  first to produce the"  >&2
+    echo "  24 kHz non-LUFS copies that the pretrained extractors consume."    >&2
+    exit 1
+fi
+
+# GPU tunables must be defined before the banner references them (script
+# runs under `set -u`, so an unset expansion would abort immediately).
+
+# Prefetch lookahead for GPU workers -- pre-decodes N upcoming songs on
+# background threads so the GPU isn't idled by librosa.load between songs.
+# 16 keeps a full batch queued ahead of the GPU at all times.
+GPU_PREFETCH=${GPU_PREFETCH:-16}
+
+# Mini-batch size for the GPU forward pass. The orchestrator collects
+# this many songs and pushes them through each GPU model in a single
+# call (with bf16/fp16 autocast + TF32). Auto-halves on CUDA OOM, so
+# 16 is a safe default on most DGX-class GPUs (A100, H100, V100 32GB).
+GPU_BATCH_SIZE=${GPU_BATCH_SIZE:-16}
+
+# Ceiling for the dynamic batch sizer. Both GPU workers co-reside on the
+# single assigned GPU, so each one starts conservatively at 16. As soon
+# as one finishes, the other sees the freed VRAM (via
+# torch.cuda.mem_get_info) and doubles its effective batch, up to this
+# cap. 128 is safe in solo mode on the DGX's A100-SXM4-40GB: MERT at
+# batch=128 peaks around 32 GB, EnCodecMAE at batch=96 peaks around
+# 36 GB -- both fit with headroom, and the OOM halving backstops any
+# miscalculation. On smaller GPUs (V100 32GB), override to 64.
+GPU_MAX_BATCH_SIZE=${GPU_MAX_BATCH_SIZE:-128}
+
 echo "=========================================================="
 echo "Parallel pretrained-embedding extraction"
 echo "=========================================================="
+echo "  Pretrained audio : $PRETRAINED_AUDIO_DIR  (24 kHz, no LUFS)"
 echo "  MusicNN workers  : $MUSICNN_WORKERS  (CPU, no GPU)"
 echo "  MERT             : 1 process  (GPU $CUDA_VISIBLE_DEVICES)"
 echo "  EnCodecMAE       : 1 process  (GPU $CUDA_VISIBLE_DEVICES)"
@@ -117,27 +154,6 @@ start_worker() {
     LABELS+=("$label")
 }
 
-# Prefetch lookahead for GPU workers -- pre-decodes N upcoming songs on
-# background threads so the GPU isn't idled by librosa.load between songs.
-# 16 keeps a full batch queued ahead of the GPU at all times.
-GPU_PREFETCH=${GPU_PREFETCH:-16}
-
-# Mini-batch size for the GPU forward pass. The orchestrator collects
-# this many songs and pushes them through each GPU model in a single
-# call (with bf16/fp16 autocast + TF32). Auto-halves on CUDA OOM, so
-# 16 is a safe default on most DGX-class GPUs (A100, H100, V100 32GB).
-GPU_BATCH_SIZE=${GPU_BATCH_SIZE:-16}
-
-# Ceiling for the dynamic batch sizer. Both GPU workers co-reside on the
-# single assigned GPU, so each one starts conservatively at 16. As soon
-# as one finishes, the other sees the freed VRAM (via
-# torch.cuda.mem_get_info) and doubles its effective batch, up to this
-# cap. 128 is safe in solo mode on the DGX's A100-SXM4-40GB: MERT at
-# batch=128 peaks around 32 GB, EnCodecMAE at batch=96 peaks around
-# 36 GB -- both fit with headroom, and the OOM halving backstops any
-# miscalculation. On smaller GPUs (V100 32GB), override to 64.
-GPU_MAX_BATCH_SIZE=${GPU_MAX_BATCH_SIZE:-128}
-
 # MusicNN workers -- force CPU-only (CUDA_VISIBLE_DEVICES="" prevents
 # TF from allocating GPU memory even though --device cpu is set). No
 # prefetch (the CPU-bound TF forward pass is the bottleneck, not IO).
@@ -148,6 +164,7 @@ for ((i=0; i<MUSICNN_WORKERS; i++)); do
         env CUDA_VISIBLE_DEVICES="" \
         python extract_pretrained_embeddings.py \
             --models musicnn \
+            --input-dir "$PRETRAINED_AUDIO_DIR" \
             --output-dir "$MUSICNN_OUT" \
             --device cpu \
             --prefetch 0 \
@@ -164,6 +181,7 @@ start_worker \
     "$LOG_DIR/mert.log" \
     python extract_pretrained_embeddings.py \
         --models mert \
+        --input-dir "$PRETRAINED_AUDIO_DIR" \
         --output-dir "$MERT_OUT" \
         --device cuda \
         --prefetch "$GPU_PREFETCH" \
@@ -176,6 +194,7 @@ start_worker \
     "$LOG_DIR/encodecmae.log" \
     python extract_pretrained_embeddings.py \
         --models encodecmae \
+        --input-dir "$PRETRAINED_AUDIO_DIR" \
         --output-dir "$ENCODEC_OUT" \
         --device cuda \
         --prefetch "$GPU_PREFETCH" \
@@ -193,18 +212,18 @@ echo ""
 # (each model processes the same input set). Count lazily across the
 # supported extensions.
 count_audio_files() {
-    if [[ ! -d audio ]]; then
+    if [[ ! -d "$PRETRAINED_AUDIO_DIR" ]]; then
         echo 0
         return
     fi
-    find audio -maxdepth 1 -type f \( \
+    find "$PRETRAINED_AUDIO_DIR" -maxdepth 1 -type f \( \
         -iname "*.wav" -o -iname "*.mp3" -o -iname "*.flac" -o -iname "*.m4a" \
     \) 2>/dev/null | wc -l
 }
 
 TOTAL_AUDIO=$(count_audio_files)
 if [[ $TOTAL_AUDIO -eq 0 ]]; then
-    echo "WARNING: no audio files found under ./audio -- bars will stay empty." >&2
+    echo "WARNING: no audio files found under $PRETRAINED_AUDIO_DIR -- bars will stay empty." >&2
     TOTAL_AUDIO=1
 fi
 
@@ -306,7 +325,7 @@ echo "All workers finished. Merging per-model outputs..."
 python merge_sharded_embeddings.py \
     --sources "$MUSICNN_OUT" "$MERT_OUT" "$ENCODEC_OUT" \
     --output-dir "$MERGED_OUT" \
-    --audio-dir audio \
+    --audio-dir "$PRETRAINED_AUDIO_DIR" \
     2>&1 | tee "$LOG_DIR/merge.log"
 
 echo ""

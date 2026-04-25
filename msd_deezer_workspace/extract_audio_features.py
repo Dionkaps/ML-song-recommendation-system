@@ -27,7 +27,11 @@ from tqdm import tqdm
 
 
 WORKSPACE_DIR = Path(__file__).resolve().parent
-DEFAULT_AUDIO_DIR = WORKSPACE_DIR / "audio"
+# Handcrafted feature extraction reads from the LUFS-normalised 22050 Hz
+# copy produced by audio_preprocessing.DualAudioPreprocessor. The original
+# (unnormalised, variable sample rate) audio lives in `audio/` and the
+# pretrained-model copy lives in `audio_pretrained/`.
+DEFAULT_AUDIO_DIR = WORKSPACE_DIR / "audio_handcrafted"
 DEFAULT_OUTPUT_DIR = WORKSPACE_DIR / "features"
 DEFAULT_RAW_DIRNAME = "raw"
 DEFAULT_SUMMARY_FILENAME = "feature_vectors.csv"

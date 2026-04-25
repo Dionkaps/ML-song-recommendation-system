@@ -62,7 +62,8 @@ def _metadata_row(
         "raw_feature_path": str(npz_path.resolve()),
         "msd_track_id": ids["msd_track_id"],
         "deezer_track_id": ids["deezer_track_id"],
-        "sample_rate": int(sample_rate) if sample_rate > 0 else 22050,
+        # Pretrained audio copy is 24 kHz (see DualAudioPreprocessor).
+        "sample_rate": int(sample_rate) if sample_rate > 0 else 24000,
         "duration_sec": round(float(duration_sec), 6),
         "frames": 0,
     }
@@ -88,7 +89,7 @@ def _load_one_record(
         return None
 
     duration_sec = float(blob.pop(DURATION_KEY, np.float32(0.0)))
-    sample_rate = int(blob.pop(SAMPLE_RATE_KEY, np.int32(22050)))
+    sample_rate = int(blob.pop(SAMPLE_RATE_KEY, np.int32(24000)))
     audio_path = _find_audio_path(audio_dir, npz_path.stem)
 
     return {

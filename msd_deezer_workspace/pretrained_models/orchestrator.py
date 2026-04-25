@@ -178,7 +178,11 @@ class PretrainedEmbeddingExtractor:
             "embeddings": {},
             "errors": {},
             "duration_sec": self._file_duration_sec(path),
-            "sample_rate": 22050,
+            # Pretrained copy produced by DualAudioPreprocessor is 24 kHz.
+            # This is the sample rate of the file on disk, not the model's
+            # internal rate (each extractor resamples to its own native rate
+            # if it differs -- MusiCNN to 16 kHz, MERT/EnCodecMAE stay at 24).
+            "sample_rate": 24000,
         }
 
         preloaded = self._existing_models_in_npz(path.stem) if skip_existing else {}
@@ -533,7 +537,7 @@ class PretrainedEmbeddingExtractor:
                 stats["errors"] += 1
                 continue
             self._persist_npz(
-                path.stem, embs, per_song_duration[idx], 22050,
+                path.stem, embs, per_song_duration[idx], 24000,
             )
             stats["processed"] += 1
             for name in self.active_model_names:

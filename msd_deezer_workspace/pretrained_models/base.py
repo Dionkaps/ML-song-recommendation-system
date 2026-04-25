@@ -138,7 +138,22 @@ def workspace_root() -> Path:
 
 
 def default_audio_dir() -> Path:
+    # Pretrained extractors consume the 24 kHz non-LUFS-normalised copy
+    # produced by audio_preprocessing.DualAudioPreprocessor. This matches
+    # the native sample rate of MERT and EnCodecMAE and avoids the
+    # 22050 -> 24000 upsample step that the old single-path preprocessing
+    # forced on them.
+    return workspace_root() / "audio_pretrained"
+
+
+def default_source_audio_dir() -> Path:
+    """Directory holding the pristine mp3 downloads from the Deezer pipeline."""
     return workspace_root() / "audio"
+
+
+def default_handcrafted_audio_dir() -> Path:
+    """Directory holding the 22 kHz LUFS-normalised copy for handcrafted features."""
+    return workspace_root() / "audio_handcrafted"
 
 
 def default_output_dir() -> Path:

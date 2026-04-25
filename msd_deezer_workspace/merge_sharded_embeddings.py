@@ -106,7 +106,8 @@ def _merge_stem(
     target_raw.mkdir(parents=True, exist_ok=True)
     out: dict[str, np.ndarray] = dict(merged)
     out[DURATION_KEY] = np.float32(duration if duration is not None else 0.0)
-    out[SAMPLE_RATE_KEY] = np.int32(sample_rate if sample_rate is not None else 22050)
+    # Pretrained audio copy is 24 kHz (see DualAudioPreprocessor).
+    out[SAMPLE_RATE_KEY] = np.int32(sample_rate if sample_rate is not None else 24000)
     np.savez_compressed(target_raw / f"{stem}.npz", **out)
     return True, models_present
 

@@ -102,7 +102,9 @@ All models loaded successfully.
 
 Nothing that the DGX needs you to install manually. For reference:
 
-- `audio/` — preprocessed WAVs, produced on the DGX itself by the Deezer download pipeline. Not synced via git.
+- `audio/` — pristine Deezer preview mp3 files downloaded on the DGX by the Deezer pipeline. Not synced via git.
+- `audio_handcrafted/` — 22 kHz / -23 LUFS / center-cropped WAV copies produced on the DGX by `preprocess_downloaded_audio.py`. Consumed by `extract_audio_features.py`. Not synced via git.
+- `audio_pretrained/` — 24 kHz / no-LUFS / center-cropped WAV copies produced on the DGX by the same script. Consumed by MERT, EnCodecMAE, and MusiCNN. Not synced via git.
 - `pretrained_embeddings/` — the output of the extraction run. Created on the DGX. Copy back to the laptop with `scp` when done.
 - `sample_runs/`, `cache/`, `features/` — local test artefacts. Ignore.
 - HuggingFace weights (`~/.cache/huggingface/`) — downloaded automatically on first run.
