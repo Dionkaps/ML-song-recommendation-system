@@ -1,11 +1,11 @@
 """
-MERT-v1-95M embedding extractor (768-dim).
+MERT-v1-330M embedding extractor (1024-dim).
 
 Reference:
   Li et al. (2023) "MERT: Acoustic Music Understanding Model with
   Large-Scale Self-supervised Training" (ICLR 2024)
   https://arxiv.org/abs/2306.00107
-  https://huggingface.co/m-a-p/MERT-v1-95M
+  https://huggingface.co/m-a-p/MERT-v1-330M
 """
 
 from __future__ import annotations
@@ -23,19 +23,15 @@ logger = logging.getLogger(__name__)
 
 
 class MERTExtractor(BaseExtractor):
-    """MERT-v1-95M embedding extractor.
+    """MERT-v1-330M embedding extractor.
 
-    Loads the 95M-parameter variant: 12 Transformer encoder layers, hidden
-    size 768. The embedding is the mean across all 13 hidden states
-    (1 input-embedding layer + 12 encoder layers), then mean-pooled over
+    Loads the 330M-parameter variant: 24 Transformer encoder layers, hidden
+    size 1024. The embedding is the mean across all 25 hidden states
+    (1 input-embedding layer + 24 encoder layers), then mean-pooled over
     time frames. This captures both low-level acoustic information (early
     layers) and high-level musical semantics (later layers).
 
-    Chosen over the 330M variant for efficiency -- the 330M model shows
-    inverse-scaling on several downstream tasks per the MERT paper, and
-    consumes ~4x the memory for marginal gains.
-
-    Runs on CUDA, MPS, or CPU. CPU is slow (~20-30 s/song) but functional
+    Runs on CUDA, MPS, or CPU. CPU is slow (~60-90 s/song) but functional
     for small-scale testing on laptops.
 
     GPU saturation features (when device == "cuda"):
@@ -48,9 +44,9 @@ class MERTExtractor(BaseExtractor):
 
     name = "mert"
     sample_rate = 24000
-    embedding_dim = 768
+    embedding_dim = 1024
 
-    HF_MODEL_NAME = "m-a-p/MERT-v1-95M"
+    HF_MODEL_NAME = "m-a-p/MERT-v1-330M"
 
     def __init__(self, device: str = "auto") -> None:
         self.device = resolve_device(device)
@@ -74,7 +70,7 @@ class MERTExtractor(BaseExtractor):
             torch.backends.cudnn.benchmark = True
 
         logger.info(
-            "Loading MERT-v1-95M on %s (first run downloads ~380 MB)...",
+            "Loading MERT-v1-330M on %s (first run downloads ~1.3 GB)...",
             self.device,
         )
         self.processor = Wav2Vec2FeatureExtractor.from_pretrained(
@@ -86,7 +82,7 @@ class MERTExtractor(BaseExtractor):
             .eval()
         )
         logger.info(
-            "MERT extractor initialized (768-dim, %s, autocast=%s)",
+            "MERT extractor initialized (1024-dim, %s, autocast=%s)",
             self.device,
             getattr(self._autocast_dtype, "__repr__", lambda: "off")(),
         )
@@ -133,7 +129,7 @@ class MERTExtractor(BaseExtractor):
     def extract_batch_from_arrays(self, arrays: list[np.ndarray]) -> np.ndarray:
         """Run a single forward pass over a batch of N waveforms.
 
-        Returns an array of shape (N, 768) dtype float32. All inputs in a
+        Returns an array of shape (N, 1024) dtype float32. All inputs in a
         batch should be the same length (the preprocessing pipeline crops
         every song to 29 s @ 24 kHz, so this holds in practice). When
         lengths differ, the HF processor pads to the longest sample and
@@ -160,8 +156,8 @@ class MERTExtractor(BaseExtractor):
 
         with torch.inference_mode(), self._autocast_ctx():
             outputs = self.model(**device_inputs, output_hidden_states=True)
-            # hidden_states: tuple of 13 tensors, each (B, T, 768)
-            stacked = torch.stack(outputs.hidden_states, dim=0)  # (L, B, T, 768)
+            # hidden_states: tuple of 25 tensors, each (B, T, 1024)
+            stacked = torch.stack(outputs.hidden_states, dim=0)  # (L, B, T, 1024)
 
             if attention_mask is not None and stacked.shape[2] > 1:
                 # Reduce the audio attention mask to the model's token
@@ -173,13 +169,13 @@ class MERTExtractor(BaseExtractor):
                 # mask: (B, T) -> (1, B, T, 1)
                 mask = mask.to(stacked.dtype).unsqueeze(0).unsqueeze(-1)
                 weighted = stacked * mask
-                token_sum = weighted.sum(dim=2)            # (L, B, 768)
+                token_sum = weighted.sum(dim=2)            # (L, B, 1024)
                 denom = mask.sum(dim=2).clamp_min(1e-6)    # (1, B, 1)
-                time_mean = token_sum / denom              # (L, B, 768)
+                time_mean = token_sum / denom              # (L, B, 1024)
             else:
-                time_mean = stacked.mean(dim=2)            # (L, B, 768)
+                time_mean = stacked.mean(dim=2)            # (L, B, 1024)
 
-            embedding = time_mean.mean(dim=0)              # (B, 768)
+            embedding = time_mean.mean(dim=0)              # (B, 1024)
             # Cast + move to CPU inside inference_mode so we never touch
             # an inference tensor from the outer scope. numpy() then yields
             # a plain ndarray that the rest of the pipeline can handle.

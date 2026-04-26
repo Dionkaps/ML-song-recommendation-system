@@ -143,9 +143,16 @@ for src in "${FEATURE_SOURCES[@]}"; do
     for red in "${REDUCTIONS[@]}"; do
         for algo in "${ALGOS[@]}"; do
             label="cluster_${src}_${red}_${algo}"
+            extra_args=()
+            # GMM grid is the heaviest (96 candidates x covariance types) and
+            # parallelises cleanly via joblib -- give it 32 workers.
+            if [ "$algo" = "gmm" ]; then
+                extra_args+=(--workers 32)
+            fi
             run_cluster_step "$label" python "run_${algo}_clustering.py" \
                 --features-path "$src" \
-                --reduction-mode "$red"
+                --reduction-mode "$red" \
+                "${extra_args[@]}"
         done
     done
 done

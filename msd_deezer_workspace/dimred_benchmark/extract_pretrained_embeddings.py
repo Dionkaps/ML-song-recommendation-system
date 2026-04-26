@@ -4,16 +4,16 @@ CLI entry point for pretrained embedding extraction.
 Extracts song-level embeddings from three complementary pretrained models
 and writes clustering-ready CSVs:
 
-  1. MusicNN    (Pons & Serra, 2019)   --  200-dim, supervised CNN, CPU-friendly
-  2. MERT-v1-95M (Li et al., 2023)     --  768-dim, self-supervised Transformer
+  1. MusicNN    (Pons & Serra, 2019)    --  200-dim, supervised CNN, CPU-friendly
+  2. MERT-v1-330M (Li et al., 2023)     -- 1024-dim, self-supervised Transformer
   3. EnCodecMAE-large-st (Pepino, 2023) -- 1024-dim, self-supervised MAE
 
 Outputs (under --output-dir, default: pretrained_embeddings/):
   raw/<song>.npz           per-song NPZ with one array per model
   musicnn_vectors.csv      MusicNN embeddings   (metadata + 200 cols)
-  mert_vectors.csv         MERT embeddings      (metadata + 768 cols)
+  mert_vectors.csv         MERT embeddings      (metadata + 1024 cols)
   encodecmae_vectors.csv   EnCodecMAE embeddings (metadata + 1024 cols)
-  feature_vectors.csv      Fused embeddings     (metadata + 1992 cols;
+  feature_vectors.csv      Fused embeddings     (metadata + 2248 cols;
                            L2-normalized per-model before concatenation)
 
 The fused CSV is directly compatible with the existing clustering pipeline:

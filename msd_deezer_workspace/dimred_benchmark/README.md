@@ -65,7 +65,7 @@ bash run_full_benchmark.sh --clustering-only
 For each of:
 
 - **2 feature sources**: `features/` (handcrafted, ~234-D) and
-  `pretrained_embeddings/` (MusicNN+MERT+EnCodecMAE fused, 1992-D)
+  `pretrained_embeddings/` (MusicNN+MERT+EnCodecMAE fused, 2248-D)
 - **3 reductions**: `pca_only`, `umap_only`, `pca_then_umap`
 - **3 algorithms**: `kmeans`, `gmm`, `hdbscan`
 

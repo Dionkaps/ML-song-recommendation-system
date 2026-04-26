@@ -10,7 +10,7 @@ keys).
 This script walks every source directory, merges the per-model NPZs for
 each song stem into a single unified NPZ under `--output-dir/raw/`, and
 then calls `generate_all_csvs` to emit the per-model CSVs plus the fused
-1992-dim `feature_vectors.csv` that is drop-in compatible with the
+2248-dim `feature_vectors.csv` that is drop-in compatible with the
 clustering pipeline.
 
 The merge is idempotent: re-running over an already-merged output directory

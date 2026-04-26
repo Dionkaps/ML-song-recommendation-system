@@ -91,24 +91,28 @@ fi
 
 # Prefetch lookahead for GPU workers -- pre-decodes N upcoming songs on
 # background threads so the GPU isn't idled by librosa.load between songs.
-# 16 keeps a full batch queued ahead of the GPU at all times.
-GPU_PREFETCH=${GPU_PREFETCH:-16}
+# 32 keeps two full batches queued ahead of the GPU at all times, which
+# matters more now that MERT-330M's per-batch wall time is shorter
+# relative to the librosa decode cost.
+GPU_PREFETCH=${GPU_PREFETCH:-32}
 
 # Mini-batch size for the GPU forward pass. The orchestrator collects
 # this many songs and pushes them through each GPU model in a single
 # call (with bf16/fp16 autocast + TF32). Auto-halves on CUDA OOM, so
-# 16 is a safe default on most DGX-class GPUs (A100, H100, V100 32GB).
-GPU_BATCH_SIZE=${GPU_BATCH_SIZE:-16}
+# starting low avoids an expensive OOM cycle on the very first batch
+# while still allowing the dynamic sizer to grow up to the cap below.
+# 8 is right-sized for MERT-330M co-residing with EnCodecMAE on 40 GB
+# (the 95M variant could start at 16; the 330M is ~3.5x heavier).
+GPU_BATCH_SIZE=${GPU_BATCH_SIZE:-8}
 
 # Ceiling for the dynamic batch sizer. Both GPU workers co-reside on the
-# single assigned GPU, so each one starts conservatively at 16. As soon
-# as one finishes, the other sees the freed VRAM (via
-# torch.cuda.mem_get_info) and doubles its effective batch, up to this
-# cap. 128 is safe in solo mode on the DGX's A100-SXM4-40GB: MERT at
-# batch=128 peaks around 32 GB, EnCodecMAE at batch=96 peaks around
-# 36 GB -- both fit with headroom, and the OOM halving backstops any
-# miscalculation. On smaller GPUs (V100 32GB), override to 64.
-GPU_MAX_BATCH_SIZE=${GPU_MAX_BATCH_SIZE:-128}
+# single assigned GPU. As soon as one finishes, the other sees the freed
+# VRAM (via torch.cuda.mem_get_info) and doubles its effective batch up
+# to this cap. With MERT-v1-330M (~330M params, 24 layers, hidden=1024)
+# the safe co-resident ceiling on an A100-SXM4-40GB is ~64; in solo
+# mode either model can grow to 64 cleanly. The OOM halving backstops
+# any miscalculation.
+GPU_MAX_BATCH_SIZE=${GPU_MAX_BATCH_SIZE:-64}
 
 echo "=========================================================="
 echo "Parallel pretrained-embedding extraction"
