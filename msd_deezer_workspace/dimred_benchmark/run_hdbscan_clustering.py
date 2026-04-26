@@ -8,7 +8,11 @@ import numpy as np
 import pandas as pd
 from joblib import Parallel, delayed
 from sklearn.cluster import HDBSCAN
-from sklearn.metrics import silhouette_score
+from sklearn.metrics import (
+    calinski_harabasz_score,
+    davies_bouldin_score,
+    silhouette_score,
+)
 
 try:
     from tqdm.auto import tqdm
@@ -337,7 +341,23 @@ def _compute_benchmark_metrics(
 ) -> dict[str, object]:
     x_red = dataset.reduced_matrix
 
-    print("[HDBSCAN] Computing benchmark metrics (Dunn / trustworthiness / stability)...")
+    print("[HDBSCAN] Computing benchmark metrics (CH / DB / Dunn / trustworthiness / stability)...")
+
+    # CH (higher better) and DB (lower better) on clustered points only --
+    # HDBSCAN's noise=-1 would otherwise be treated as a giant pseudo-cluster
+    # and skew the indices. Need >= 2 real clusters with at least one point
+    # each; pca_only on handcrafted features sometimes produces 0 clusters
+    # (everything noise) and we report NaN there.
+    clustered_mask = original_labels != -1
+    n_clusters = int(len(set(original_labels[clustered_mask]))) if clustered_mask.any() else 0
+    if n_clusters >= 2 and clustered_mask.sum() > n_clusters:
+        x_clust = x_red[clustered_mask]
+        labels_clust = original_labels[clustered_mask]
+        calinski = float(calinski_harabasz_score(x_clust, labels_clust))
+        davies = float(davies_bouldin_score(x_clust, labels_clust))
+    else:
+        calinski = float("nan")
+        davies = float("nan")
 
     # Dunn on the inliers only (HDBSCAN noise = -1 is excluded inside dunn_index).
     dunn = dunn_index(x_red, original_labels)
@@ -366,6 +386,8 @@ def _compute_benchmark_metrics(
     )
 
     return {
+        "calinski_harabasz_score": calinski,
+        "davies_bouldin_score": davies,
         "dunn_index": dunn,
         "trustworthiness": trust,
         "trustworthiness_n_neighbors": 10,

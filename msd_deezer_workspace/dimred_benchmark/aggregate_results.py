@@ -152,6 +152,7 @@ def write_markdown(frame: pd.DataFrame, path: Path) -> None:
             "best_reduction": winner["reduction"],
             "overall_rank": round(float(winner["overall_rank"]), 3),
             "silhouette": winner.get("silhouette_score"),
+            "calinski_harabasz": winner.get("calinski_harabasz_score"),
             "davies_bouldin": winner.get("davies_bouldin_score"),
             "dunn": winner.get("dunn_index"),
             "trustworthiness": winner.get("trustworthiness"),

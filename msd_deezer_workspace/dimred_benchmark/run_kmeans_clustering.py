@@ -291,7 +291,13 @@ def _compute_benchmark_metrics(
     x_norm = normalize(x_red, norm="l2")
     labels = model.predict(x_norm)
 
-    print("[KMeans] Computing benchmark metrics (Dunn / trustworthiness / stability)...")
+    print("[KMeans] Computing benchmark metrics (CH / DB / Dunn / trustworthiness / stability)...")
+
+    # CH (higher better) and DB (lower better) on the spherical-normalised
+    # space the algorithm actually saw. Computed on inliers + reassigned
+    # outliers together because that's the final assignment used downstream.
+    calinski = float(calinski_harabasz_score(x_norm, labels))
+    davies = float(davies_bouldin_score(x_norm, labels))
 
     # Dunn on the reduced space, inliers only
     dunn = dunn_index(x_red[inlier_mask], labels[inlier_mask])
@@ -319,6 +325,8 @@ def _compute_benchmark_metrics(
     )
 
     return {
+        "calinski_harabasz_score": calinski,
+        "davies_bouldin_score": davies,
         "dunn_index": dunn,
         "trustworthiness": trust,
         "trustworthiness_n_neighbors": 10,

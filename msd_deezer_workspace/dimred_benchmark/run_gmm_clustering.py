@@ -6,7 +6,12 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from joblib import Parallel, delayed
-from sklearn.metrics import silhouette_samples, silhouette_score
+from sklearn.metrics import (
+    calinski_harabasz_score,
+    davies_bouldin_score,
+    silhouette_samples,
+    silhouette_score,
+)
 from sklearn.mixture import BayesianGaussianMixture
 
 try:
@@ -374,7 +379,17 @@ def _compute_benchmark_metrics(
 ) -> dict[str, object]:
     x_red = dataset.reduced_matrix
 
-    print("[GMM] Computing benchmark metrics (Dunn / trustworthiness / stability)...")
+    print("[GMM] Computing benchmark metrics (CH / DB / Dunn / trustworthiness / stability)...")
+
+    # CH (higher better) and DB (lower better) need >= 2 clusters; the
+    # selection step already guarantees this, but guard defensively in case
+    # a degenerate refit produced a single-component assignment.
+    if len(np.unique(labels)) >= 2:
+        calinski = float(calinski_harabasz_score(x_red, labels))
+        davies = float(davies_bouldin_score(x_red, labels))
+    else:
+        calinski = float("nan")
+        davies = float("nan")
 
     dunn = dunn_index(x_red, labels)
     trust = trustworthiness_score(
@@ -411,6 +426,8 @@ def _compute_benchmark_metrics(
     )
 
     return {
+        "calinski_harabasz_score": calinski,
+        "davies_bouldin_score": davies,
         "dunn_index": dunn,
         "trustworthiness": trust,
         "trustworthiness_n_neighbors": 10,
