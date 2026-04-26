@@ -1,0 +1,19 @@
+# Generated audio + features + clustering output. Everything here is
+# reproducible from the seeded sample + the scripts in this directory,
+# so we never commit it (and on the DGX it's tens of GB).
+audio/
+audio_handcrafted/
+audio_pretrained/
+features/
+pretrained_embeddings/
+pretrained_embeddings_musicnn/
+pretrained_embeddings_mert/
+pretrained_embeddings_encodecmae/
+pretrained_embeddings_logs/
+cluster_results/
+logs/
+sampled_manifest.txt
+comparison_report.csv
+comparison_report.md
+__pycache__/
+*.pyc
