@@ -19,6 +19,8 @@
   "soft_silhouette_score": 0.3983890311432887,
   "reg_covar": 0.00045421630144119266,
   "selection_method": "soft_silhouette_with_hierarchical_refinement",
+  "calinski_harabasz_score": 11112.490913658825,
+  "davies_bouldin_score": 0.9189148657553083,
   "dunn_index": 0.010667483504070027,
   "trustworthiness": 0.9472363968301736,
   "trustworthiness_n_neighbors": 10,

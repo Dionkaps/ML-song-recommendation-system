@@ -16,6 +16,8 @@
   "silhouette_score": 0.47120970487594604,
   "distance_metric": "cosine_via_l2_normalization",
   "selection_method": "multi_criterion_consensus",
+  "calinski_harabasz_score": 10776.254468336445,
+  "davies_bouldin_score": 0.8366077600535927,
   "dunn_index": 0.006206883401227748,
   "trustworthiness": 0.9503656093891062,
   "trustworthiness_n_neighbors": 10,

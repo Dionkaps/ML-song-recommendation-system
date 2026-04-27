@@ -17,6 +17,8 @@
   "min_samples": 33,
   "cluster_selection_method": "leaf",
   "silhouette_score_clustered_only": 0.5879119038581848,
+  "calinski_harabasz_score": 11002.090270341898,
+  "davies_bouldin_score": 0.5389775334416269,
   "dunn_index": 0.05537864883297134,
   "trustworthiness": 0.9503656093891062,
   "trustworthiness_n_neighbors": 10,
