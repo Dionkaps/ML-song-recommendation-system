@@ -1,0 +1,23 @@
+# Generated sample workspaces and results.
+samples/
+logs/
+method_selection_repeated_samples.csv
+candidate_k_validation_all_samples.csv
+candidate_k_validation_summary.csv
+full_dataset_k_method_recommendation.md
+sample_manifest.csv
+__pycache__/
+*.pyc
+
+# Safety: copied/generated audio and feature outputs are always local to
+# sample workspaces and should never be committed.
+audio/
+audio_handcrafted/
+audio_pretrained/
+features/
+pretrained_embeddings/
+pretrained_embeddings_musicnn/
+pretrained_embeddings_mert/
+pretrained_embeddings_encodecmae/
+pretrained_embeddings_logs/
+cluster_results/
