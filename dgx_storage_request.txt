@@ -1,0 +1,65 @@
+ΠΡΟΧΕΙΡΗ ΕΚΤΙΜΗΣΗ ΧΩΡΟΥ ΓΙΑ ΤΟ MSD-DEEZER PIPELINE
+
+Για να εκτιμηθεί ο απαιτούμενος χώρος στον DGX, έτρεξα δοκιμαστικά το
+pipeline σε μικρό σύνολο κομματιών και έκανα αναγωγή στο πλήρες σύνολο των
+812,353 downloaded MP3.
+
+Η δοκιμή περιλάμβανε:
+
+1. Deezer matching/download σε μικρό sample από το catalog.
+2. Preprocessing σε δύο audio branches:
+   - audio_handcrafted/
+   - audio_pretrained/
+3. Handcrafted feature extraction:
+   - features/raw/
+   - features/feature_vectors.csv
+4. Pretrained embedding extraction με:
+   - MusicNN
+   - MERT-v1-330M
+   - EnCodecMAE
+5. Μέτρηση των πραγματικών αρχείων που δημιουργήθηκαν και υπολογισμό μέσου
+   χώρου ανά τραγούδι.
+
+Με βάση αυτή τη δοκιμή, η εκτίμηση για τα 812,353 τραγούδια είναι:
+
+- audio/: περίπου 363 GiB
+- audio_handcrafted/: περίπου 968 GiB
+- audio_pretrained/: περίπου 1.03 TiB
+- features/raw/: περίπου 1.50 TiB
+- features/feature_vectors.csv: περίπου 2 GiB
+- pretrained_embeddings/: περίπου 51 GiB
+- υπάρχοντα benchmark outputs: περίπου 253G
+
+Σημείωση για το pretrained_embeddings/: έγινε επανέλεγχος στο
+sample_10_storage_run και ο φάκελος είναι 679,591 bytes για 10 τραγούδια.
+Αυτό αντιστοιχεί σε περίπου 51.42 GiB για 812,353 τραγούδια. Το μέγεθος
+είναι χαμηλό επειδή αποθηκεύονται song-level mean-pooled vectors, όχι
+frame-level activations: MusicNN 200 διαστάσεις, MERT 1024 διαστάσεις και
+EnCodecMAE 1024 διαστάσεις, όλα ως float32. Από αυτό το estimate, περίπου
+7.08 GiB είναι τα raw NPZ, περίπου 22.56 GiB τα per-model CSVs και περίπου
+21.72 GiB το fused feature_vectors.csv.
+
+Αν κρατηθούν όλα τα outputs ταυτόχρονα, δηλαδή αρχικό audio/, handcrafted WAVs,
+pretrained WAVs, raw handcrafted features, pretrained embeddings και benchmark
+outputs, το καθαρό μέγεθος μπορεί να φτάσει περίπου τα 4 TiB. Με πρακτικό
+safety buffer περίπου 500 GiB για προσωρινά αρχεία, partial runs, logs, cache
+και αποκλίσεις από το sample, η ανάγκη μνήμης ανεβαίνει περίπου στα
+4.5 TiB.
+
+Πιο οικονομικό σενάριο είναι να τρέξουν τα στάδια ξεχωριστά:
+
+- Handcrafted pipeline μόνο του:
+  - peak περίπου 3.0 TiB
+  - με safety buffer περίπου 3.5 TiB
+  - μετά το cleanup μένουν περίπου 2 GiB αν κρατηθεί μόνο το τελικό
+    feature_vectors.csv, ή περίπου 1.50 TiB αν κρατηθεί και το features/raw/.
+
+- Pretrained embedding pipeline μόνο του:
+  - peak περίπου 1.7 TiB
+  - με safety buffer περίπου 2.5 TiB
+  - μετά το cleanup μένουν περίπου 51 GiB αν κρατηθούν μόνο τα τελικά
+    song-level pretrained embeddings και CSV outputs. Αν κρατηθούν
+    frame-level embeddings/activations, αυτό δεν καλύπτεται από την παραπάνω
+    εκτίμηση και ο χώρος θα είναι πολύ μεγαλύτερος.
+
+Επομένως, η ανάγκη για μνήμη υπολογίζεται περίπου γύρω στα 4-4.5TB
