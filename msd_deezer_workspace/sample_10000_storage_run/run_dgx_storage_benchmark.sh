@@ -196,6 +196,14 @@ run_step() {
 run_parallel_pretrained() {
     local expected_count="$1"
     local parallel_log_dir="$LOG_DIR/pretrained_parallel_$(date +%Y%m%d_%H%M%S)"
+    local merged_resolved
+
+    merged_resolved="$(realpath -m "$EMBEDDINGS_DIR")"
+    if [[ "$merged_resolved" != "$BENCH_DIR/pretrained_embeddings" ]]; then
+        echo "ERROR: refusing to clean unexpected merged output: $merged_resolved" >&2
+        return 2
+    fi
+    rm -rf --one-file-system -- "$merged_resolved"
 
     mkdir -p \
         "$parallel_log_dir" \
