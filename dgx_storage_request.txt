@@ -1,43 +1,11 @@
 ΕΚΤΙΜΗΣΗ ΧΩΡΟΥ ΑΠΟΘΗΚΕΥΣΗΣ ΓΙΑ ΤΟ MSD-DEEZER PIPELINE
 
-Η νεότερη εκτίμηση βασίζεται σε απομονωμένο benchmark στον DGX, μέσα στο
-sample_10000_storage_run/. Αντιγράφηκαν 10,000 ήδη κατεβασμένα τραγούδια από
-το msd_deezer_workspace/audio/ και όλη η επεξεργασία έγινε μόνο μέσα στον
-συγκεκριμένο φάκελο.
+Η εκτίμηση αφορά το πλήρες σύνολο των 812,353 downloaded MP3. Βασίζεται σε
+benchmark 10,000 τραγουδιών, από τα οποία 9,934 πέρασαν επιτυχώς το
+preprocessing. Τα υπόλοιπα 66 αφαιρέθηκαν ως too-short ή silent. Δεν υπήρξαν
+processing errors.
 
-Στοιχεία benchmark:
-
-- Αρχικό sample: 10,000 audio files.
-- Μετά το preprocessing: 9,934 valid files.
-- Αφαιρέθηκαν: 65 too-short tracks και 1 silent track.
-- Errors: 0.
-- Πλήρες σύνολο για αναγωγή: 812,353 downloaded MP3.
-
-Το benchmark περιλάμβανε:
-
-1. Preprocessing σε δύο audio branches:
-   - audio_handcrafted/
-   - audio_pretrained/
-2. Handcrafted feature extraction:
-   - features/raw/
-   - features/feature_vectors.csv
-3. Pretrained embedding extraction με:
-   - MusicNN
-   - MERT-v1-330M
-   - EnCodecMAE
-4. Parallel pretrained extraction όπως στο κύριο benchmark code:
-   - MusicNN σε 16 CPU shards.
-   - MERT σε 1 GPU process.
-   - EnCodecMAE σε 1 GPU process.
-   - merge σε τελικό pretrained_embeddings/.
-
-Τα αποτελέσματα του sample_10000 ήταν:
-
-- Τελικά outputs μαζί με το source audio: 48.56 GiB.
-- Peak μαζί με τα προσωρινά parallel pretrained intermediates: 49.10 GiB.
-- Benchmark-local model/framework cache: 5.53 GiB, χωρίς αναγωγή ανά τραγούδι.
-
-Με βάση αυτό, η εκτίμηση για τα 812,353 τραγούδια είναι:
+Εκτιμώμενος χώρος για το πλήρες dataset:
 
 - audio/: περίπου 362.0 GiB.
 - audio_handcrafted/: περίπου 961.2 GiB, δηλαδή περίπου 0.94 TiB.
@@ -51,53 +19,29 @@ sample_10000_storage_run/. Αντιγράφηκαν 10,000 ήδη κατεβασ
   - mert_vectors.csv: περίπου 8.9 GiB.
   - encodecmae_vectors.csv: περίπου 9.2 GiB.
   - fused feature_vectors.csv: περίπου 19.3 GiB.
-- Προσωρινά parallel pretrained intermediates:
-  - περίπου 43.8 GiB.
-  - Αυτά χρειάζονται κατά το parallel extraction και μπορούν να διαγραφούν μετά
-    το merge στο τελικό pretrained_embeddings/.
+- Προσωρινά pretrained intermediate outputs: περίπου 43.8 GiB.
 
-Σημείωση για το pretrained_embeddings/: το προηγούμενο sample_10 estimate
-έδινε περίπου 51 GiB. Το πιο αξιόπιστο sample_10000 estimate δίνει περίπου
-46.6 GiB. Το μέγεθος παραμένει μικρό επειδή αποθηκεύονται song-level
-mean-pooled vectors, όχι frame-level activations. Συγκεκριμένα κρατάμε:
-MusicNN 200 διαστάσεις, MERT 1024 διαστάσεις και EnCodecMAE 1024 διαστάσεις,
-όλα ως float32, μαζί με τα αντίστοιχα CSV exports.
+Αν κρατηθούν ταυτόχρονα το αρχικό audio, τα δύο preprocessed audio branches,
+τα handcrafted features και τα τελικά pretrained embeddings, ο καθαρός χώρος
+εκτιμάται σε περίπου 3.85 TiB.
 
-Αν κρατηθούν όλα τα τελικά outputs ταυτόχρονα, δηλαδή αρχικό audio/,
-handcrafted WAVs, pretrained WAVs, raw handcrafted features και τελικά
-pretrained embeddings, το καθαρό μέγεθος για όλο το dataset εκτιμάται σε:
+Αν συνυπολογιστούν και τα προσωρινά pretrained intermediate outputs που
+χρειάζονται μέχρι να γίνει το merge, το peak εκτιμάται σε περίπου 3.90 TiB.
 
-- 3,944.9 GiB, δηλαδή περίπου 3.85 TiB.
+Το benchmark-local model/framework cache ήταν περίπου 5.5 GiB. Αυτό δεν
+κλιμακώνεται ανά τραγούδι και δεν το υπολογίζω ως dataset output, αλλά πρέπει
+να υπάρχει μικρό περιθώριο για cache, logs, partial runs και filesystem
+overhead.
 
-Κατά το parallel pretrained extraction, αν κρατηθούν τα προσωρινά per-model
-pretrained intermediates μέχρι να γίνει το merge, το peak γίνεται:
+Με πρακτικό safety buffer περίπου 500 GiB, η προτεινόμενη απαίτηση χώρου
+αποθήκευσης είναι περίπου 4.5 TiB.
 
-- 3,988.7 GiB, δηλαδή περίπου 3.90 TiB.
+Σημαντική παρατήρηση: τα handcrafted raw features είναι πολύ μεγαλύτερα από τα
+pretrained embeddings επειδή αποθηκεύουν frame-level feature arrays. Αν μετά το
+feature extraction κρατηθεί μόνο το τελικό features/feature_vectors.csv, ο
+μόνιμος handcrafted χώρος πέφτει από περίπου 1.49 TiB σε περίπου 1.8 GiB.
 
-Με πρακτικό safety buffer περίπου 500 GiB για προσωρινά αρχεία, partial runs,
-logs, caches, filesystem overhead και αποκλίσεις από το sample, η προτεινόμενη
-ανάγκη χώρου αποθήκευσης είναι:
-
-- περίπου 4.5 TiB.
-
-Πιο οικονομικό σενάριο είναι να τρέξουν τα στάδια ξεχωριστά:
-
-- Handcrafted pipeline μόνο του:
-  - audio/ + audio_handcrafted/ + features/ δίνουν περίπου 2.79 TiB.
-  - Με safety buffer, χρειάζονται περίπου 3.3-3.5 TiB.
-  - Μετά το cleanup μένουν περίπου 1.8 GiB αν κρατηθεί μόνο το τελικό
-    features/feature_vectors.csv, ή περίπου 1.49 TiB αν κρατηθεί και το
-    features/raw/.
-
-- Pretrained embedding pipeline μόνο του:
-  - audio/ + audio_pretrained/ + τελικό pretrained_embeddings/ +
-    προσωρινά pretrained intermediates δίνουν περίπου 1.46 TiB peak.
-  - Με safety buffer, χρειάζονται περίπου 2.0 TiB. Για πιο άνετη λειτουργία
-    και retries, 2.5 TiB είναι πιο ασφαλές.
-  - Μετά το cleanup μένουν περίπου 46.6 GiB αν κρατηθούν μόνο τα τελικά
-    song-level pretrained embeddings και CSV outputs.
-  - Αν κρατηθούν frame-level embeddings/activations, αυτό δεν καλύπτεται από
-    την παραπάνω εκτίμηση και ο χώρος θα είναι πολύ μεγαλύτερος.
-
-Συμπέρασμα: για να τρέξει και να κρατηθεί όλο το MSD-Deezer pipeline με
-ασφάλεια στον DGX, η λογική απαίτηση είναι περίπου 4.5 TiB χώρου αποθήκευσης.
+Αντίστοιχα, τα pretrained embeddings είναι μικρότερα επειδή αποθηκεύονται
+song-level mean-pooled vectors, όχι frame-level activations. Αν κρατηθούν
+frame-level pretrained activations, ο χώρος δεν καλύπτεται από την παραπάνω
+εκτίμηση και θα είναι πολύ μεγαλύτερος.
