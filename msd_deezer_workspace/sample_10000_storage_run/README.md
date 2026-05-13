@@ -22,6 +22,9 @@ Intended layout:
 - `audio_pretrained/`: pretrained-model preprocessing outputs.
 - `features/`: handcrafted feature outputs.
 - `pretrained_embeddings/`: pretrained embedding outputs.
+- `pretrained_embeddings_musicnn/`, `pretrained_embeddings_mert/`,
+  `pretrained_embeddings_encodecmae/`: per-model parallel extraction outputs
+  used to build `pretrained_embeddings/`.
 - `data/`: manifests and benchmark metadata.
 - `cache/`: benchmark-local caches only.
 - `logs/`: benchmark-local logs only.
@@ -59,15 +62,32 @@ bash sample_10000_storage_run/copy_10000_from_downloaded.sh \
 nvidia-smi
 export CUDA_VISIBLE_DEVICES=<gpu_index>
 
-# Run preprocessing, handcrafted features, pretrained embeddings, and report.
+# Run preprocessing, handcrafted features, parallel pretrained embeddings,
+# merge, verification, and report.
 bash sample_10000_storage_run/run_dgx_storage_benchmark.sh
 ```
 
 The DGX scripts write outputs and framework/model caches only under
 `sample_10000_storage_run/`. The runner also verifies that MusicNN, MERT and
 EnCodecMAE all load before processing, and verifies that all three models
-successfully produced embeddings for all 10,000 songs before writing the final
-storage report.
+successfully produced embeddings for every file that survives preprocessing
+before writing the final storage report.
+
+Pretrained extraction follows the repo's existing parallel launcher pattern:
+MusicNN runs as sharded CPU workers, while MERT and EnCodecMAE run as separate
+GPU workers and are merged afterwards. Defaults can be tuned before launch:
+
+```bash
+export MUSICNN_WORKERS=16
+export GPU_PREFETCH=32
+export GPU_BATCH_SIZE=8
+export GPU_MAX_BATCH_SIZE=64
+export MERGE_WORKERS=16
+```
+
+If preprocessing removes short or silent files, pretrained verification uses
+the resulting `audio_pretrained/` count rather than the original 10,000 source
+files.
 
 The PowerShell helper is only for local Windows use after a source directory is
 explicitly provided:

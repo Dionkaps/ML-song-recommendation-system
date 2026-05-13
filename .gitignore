@@ -35,6 +35,9 @@ Thumbs.db
 /msd_deezer_workspace/sample_10000_storage_run/logs/
 /msd_deezer_workspace/sample_10000_storage_run/preprocess_summary.json
 /msd_deezer_workspace/sample_10000_storage_run/pretrained_embeddings/
+/msd_deezer_workspace/sample_10000_storage_run/pretrained_embeddings_musicnn/
+/msd_deezer_workspace/sample_10000_storage_run/pretrained_embeddings_mert/
+/msd_deezer_workspace/sample_10000_storage_run/pretrained_embeddings_encodecmae/
 /msd_deezer_workspace/data/*.tmp
 /msd_deezer_workspace/data/*.pending.csv
 # Deezer download working state -- msd_deezer_catalog.csv is the committed seed,
