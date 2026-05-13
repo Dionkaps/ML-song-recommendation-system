@@ -1,47 +1,39 @@
-ΕΚΤΙΜΗΣΗ ΧΩΡΟΥ ΑΠΟΘΗΚΕΥΣΗΣ ΓΙΑ ΤΟ MSD-DEEZER PIPELINE
+ΕΚΤΙΜΗΣΗ ΧΩΡΟΥ ΑΠΟΘΗΚΕΥΣΗΣ ΓΙΑ ΤΟ PIPELINE
 
-Η εκτίμηση αφορά το πλήρες σύνολο των 812,353 downloaded MP3. Βασίζεται σε
+Η εκτίμηση αφορά το πλήρες σύνολο των 812,353 downloaded κομματιών. Βασίζεται σε
 benchmark 10,000 τραγουδιών, από τα οποία 9,934 πέρασαν επιτυχώς το
-preprocessing. Τα υπόλοιπα 66 αφαιρέθηκαν ως too-short ή silent. Δεν υπήρξαν
-processing errors.
+preprocessing.
+
+Το pipeline δημιουργεί πολλαπλά ενδιάμεσα και τελικά αρχεία για κάθε τραγούδι:
+κρατά το αρχικό audio, δύο preprocessed audio εκδοχές, handcrafted features και
+pretrained embeddings. Το μεγαλύτερο μέρος του χώρου προέρχεται από τα
+preprocessed audio και τα raw handcrafted features, ενώ τα τελικά pretrained
+embeddings είναι σχετικά μικρά επειδή αποθηκεύονται ως song-level vectors.
+
+Τα μεγέθη δίνονται σε decimal GB/TB.
 
 Εκτιμώμενος χώρος για το πλήρες dataset:
 
-- audio/: περίπου 362.0 GiB.
-- audio_handcrafted/: περίπου 961.2 GiB, δηλαδή περίπου 0.94 TiB.
-- audio_pretrained/: περίπου 1,046.2 GiB, δηλαδή περίπου 1.02 TiB.
-- features/: περίπου 1,528.9 GiB, δηλαδή περίπου 1.49 TiB.
-  - features/raw/: περίπου 1,527.1 GiB.
-  - features/feature_vectors.csv: περίπου 1.8 GiB.
-- pretrained_embeddings/: περίπου 46.6 GiB.
-  - raw NPZ: περίπου 7.1 GiB.
-  - musicnn_vectors.csv: περίπου 2.1 GiB.
-  - mert_vectors.csv: περίπου 8.9 GiB.
-  - encodecmae_vectors.csv: περίπου 9.2 GiB.
-  - fused feature_vectors.csv: περίπου 19.3 GiB.
-- Προσωρινά pretrained intermediate outputs: περίπου 43.8 GiB.
+- audio/: περίπου 388.7 GB.
+- audio_handcrafted/: περίπου 1,032.1 GB.
+- audio_pretrained/: περίπου 1,123.4 GB.
+- features/: περίπου 1,641.7 GB.
+  - features/raw/: περίπου 1,639.7 GB.
+  - features/feature_vectors.csv: περίπου 1.9 GB.
+- pretrained_embeddings/: περίπου 50.0 GB.
+  - raw NPZ: περίπου 7.6 GB.
+  - musicnn_vectors.csv: περίπου 2.3 GB.
+  - mert_vectors.csv: περίπου 9.5 GB.
+  - encodecmae_vectors.csv: περίπου 9.8 GB.
+  - fused feature_vectors.csv: περίπου 20.8 GB.
+- Προσωρινά pretrained intermediate outputs: περίπου 47.0 GB.
 
 Αν κρατηθούν ταυτόχρονα το αρχικό audio, τα δύο preprocessed audio branches,
 τα handcrafted features και τα τελικά pretrained embeddings, ο καθαρός χώρος
-εκτιμάται σε περίπου 3.85 TiB.
+εκτιμάται σε περίπου 4,235.8 GB, δηλαδή 4.24 TB.
 
 Αν συνυπολογιστούν και τα προσωρινά pretrained intermediate outputs που
-χρειάζονται μέχρι να γίνει το merge, το peak εκτιμάται σε περίπου 3.90 TiB.
+χρειάζονται μέχρι να γίνει το merge, το peak εκτιμάται σε περίπου 4,282.8 GB,
+δηλαδή 4.28 TB.
 
-Το benchmark-local model/framework cache ήταν περίπου 5.5 GiB. Αυτό δεν
-κλιμακώνεται ανά τραγούδι και δεν το υπολογίζω ως dataset output, αλλά πρέπει
-να υπάρχει μικρό περιθώριο για cache, logs, partial runs και filesystem
-overhead.
-
-Με πρακτικό safety buffer περίπου 500 GiB, η προτεινόμενη απαίτηση χώρου
-αποθήκευσης είναι περίπου 4.5 TiB.
-
-Σημαντική παρατήρηση: τα handcrafted raw features είναι πολύ μεγαλύτερα από τα
-pretrained embeddings επειδή αποθηκεύουν frame-level feature arrays. Αν μετά το
-feature extraction κρατηθεί μόνο το τελικό features/feature_vectors.csv, ο
-μόνιμος handcrafted χώρος πέφτει από περίπου 1.49 TiB σε περίπου 1.8 GiB.
-
-Αντίστοιχα, τα pretrained embeddings είναι μικρότερα επειδή αποθηκεύονται
-song-level mean-pooled vectors, όχι frame-level activations. Αν κρατηθούν
-frame-level pretrained activations, ο χώρος δεν καλύπτεται από την παραπάνω
-εκτίμηση και θα είναι πολύ μεγαλύτερος.
+Με πρακτικό safety buffer το σύνολο είναι περίπου 5 TB.
